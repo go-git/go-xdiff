@@ -1,0 +1,97 @@
+name: Update C reference
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-c-reference
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Find upstream revision
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          revision=$(gh api 'repos/git/git/commits?sha=master&path=xdiff&per_page=1' --jq '.[0].sha')
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+          if [[ "$revision" == "$(cat internal/testref/upstream/REVISION)" ]]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.upstream.outputs.changed == 'true'
+        with:
+          repository: git/git
+          ref: ${{ steps.upstream.outputs.revision }}
+          path: .upstream-git
+          sparse-checkout: xdiff
+          persist-credentials: false
+      - name: Update vendored sources
+        id: vendor
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          UPSTREAM_REVISION: ${{ steps.upstream.outputs.revision }}
+        run: |
+          find internal/testref/upstream -maxdepth 1 -type f \( -name '*.c' -o -name '*.h' \) -delete
+          cp .upstream-git/xdiff/*.[ch] internal/testref/upstream/
+          changed=$(git diff --name-only -- internal/testref/upstream/)
+          added=$(git ls-files --others --exclude-standard -- internal/testref/upstream/)
+          if [[ -z "$changed" && -z "$added" ]]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "$UPSTREAM_REVISION" > internal/testref/upstream/REVISION
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        if: steps.vendor.outputs.changed == 'true'
+        with:
+          go-version: stable
+      - name: Reference comparisons
+        id: reference
+        if: steps.vendor.outputs.changed == 'true'
+        continue-on-error: true
+        env:
+          CGO_ENABLED: "0"
+          GO_XDIFF_TESTREF: "1"
+        run: |
+          go test -count=1 ./...
+          cd benchmarks
+          go test -count=1 ./...
+      - uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676
+        if: steps.vendor.outputs.changed == 'true'
+        with:
+          add-paths: internal/testref/upstream/
+          branch: automation/update-xdiff-reference
+          delete-branch: true
+          signoff: true
+          author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          commit-message: "chore(testref): update Git xdiff reference"
+          title: "chore(testref): update Git xdiff reference"
+          body: |
+            Update the C test sources from git/git@${{ steps.upstream.outputs.revision }}.
+
+            Reference checks: **${{ steps.reference.outcome }}**.
+            [Workflow results](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+            This updates the test reference only, not the Go implementation.
+      - name: Report reference failures
+        if: steps.vendor.outputs.changed == 'true' && steps.reference.outcome == 'failure'
+        run: exit 1

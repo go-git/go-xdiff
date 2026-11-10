@@ -1,0 +1,18 @@
+go-xdiff
+
+This library is a Go translation of Git's xdiff implementation:
+https://github.com/git/git/tree/master/xdiff
+
+LibXDiff by Davide Libenzi (File Differential Library)
+Copyright (C) 2003 Davide Libenzi
+Licensed under the GNU Lesser General Public License, version 2.1 or later.
+The Go translation and modifications date from November 2026.
+
+The histogram algorithm derives from xhistogram.c:
+Copyright (C) 2010, Google Inc.
+and other copyright owners as documented in JGit's IP log.
+Licensed under the Eclipse Distribution License v1.0.
+Its full notice is retained in the source distribution.
+
+The original C files in internal/testref are reference test inputs only.
+They are not part of the Go library or its compiled runtime.

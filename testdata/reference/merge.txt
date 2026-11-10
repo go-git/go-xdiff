@@ -1,0 +1,6 @@
+alpha
+<<<<<<< ours
+ours
+=======
+theirs
+>>>>>>> theirs
