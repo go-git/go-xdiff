@@ -17,7 +17,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := result.WriteUnified(ctx, os.Stdout, &xdiff.EmitOptions{Context: 1}); err != nil {
+	if err := xdiff.WriteUnified(ctx, os.Stdout, result, &xdiff.EmitOptions{Context: 1}); err != nil {
 		log.Fatal(err)
 	}
 }

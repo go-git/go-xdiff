@@ -90,8 +90,17 @@ func TestHunkCancellationAtEveryCheck(t *testing.T) {
 					return err
 				})
 				checkCancellation(t, func(ctx context.Context) error {
-					return r.WriteUnified(ctx, io.Discard, &emit)
+					return WriteUnified(ctx, io.Discard, r, &emit)
 				})
+				for _, customHeader := range []bool{false, true} {
+					callbacks := EmitCallbacks{LineFunc: func(...[]byte) error { return nil }}
+					if customHeader {
+						callbacks.HunkHeaderFunc = func(Hunk) error { return nil }
+					}
+					checkCancellation(t, func(ctx context.Context) error {
+						return r.Emit(ctx, &emit, &callbacks)
+					})
+				}
 			})
 		}
 	}
@@ -189,36 +198,48 @@ func TestOutputFailureAtEveryWrite(t *testing.T) {
 	opts := EmitOptions{Context: 1}
 	calls := 0
 	var want bytes.Buffer
-	if err := r.WriteUnified(t.Context(), writeFunc(func(p []byte) (int, error) {
+	if err := WriteUnified(t.Context(), writeFunc(func(p []byte) (int, error) {
 		calls++
 		return want.Write(p)
-	}), &opts); err != nil {
+	}), r, &opts); err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("write failure")
-	for _, short := range []bool{false, true} {
+	for _, mode := range []string{"error", "short", "cancel"} {
 		for failAt := 1; failAt <= calls; failAt++ {
+			ctx, cancel := context.WithCancel(t.Context())
 			var got bytes.Buffer
 			remaining := failAt
-			err := r.WriteUnified(t.Context(), writeFunc(func(p []byte) (int, error) {
+			err := WriteUnified(ctx, writeFunc(func(p []byte) (int, error) {
 				remaining--
 				if remaining == 0 {
-					if short {
+					switch mode {
+					case "short":
 						return got.Write(p[:len(p)-1])
+					case "cancel":
+						cancel()
+						return got.Write(p)
 					}
 					return 0, failure
 				}
 				return got.Write(p)
-			}), &opts)
+			}), r, &opts)
+			cancel()
 			expected := failure
-			if short {
+			switch mode {
+			case "short":
 				expected = io.ErrShortWrite
+			case "cancel":
+				expected = context.Canceled
 			}
 			if !errors.Is(err, expected) {
-				t.Fatalf("write %d, short=%v: %v, want %v", failAt, short, err, expected)
+				t.Fatalf("write %d, mode=%s: %v, want %v", failAt, mode, err, expected)
 			}
-			if !bytes.HasPrefix(want.Bytes(), got.Bytes()) || got.Len() == want.Len() {
-				t.Fatalf("write %d: output is not an incomplete prefix", failAt)
+			if remaining != 0 {
+				t.Fatalf("write %d, mode=%s: output continued after failure", failAt, mode)
+			}
+			if !bytes.HasPrefix(want.Bytes(), got.Bytes()) || (mode != "cancel" && got.Len() == want.Len()) {
+				t.Fatalf("write %d, mode=%s: unexpected output prefix", failAt, mode)
 			}
 		}
 	}

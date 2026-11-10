@@ -142,15 +142,15 @@ func (b *hunkBuilder) function(line []byte, size int) (string, bool) {
 	if !b.check() {
 		return "", false
 	}
-	if b.opts.FindFunction != nil {
-		name, ok := b.opts.FindFunction(line)
+	if b.opts.FindFunc != nil {
+		name, ok := b.opts.FindFunc(line)
 		if len(name) > size {
 			name = name[:size]
 		}
 		return name, ok
 	}
-	if len(line) == 0 || !(line[0] >= 'a' && line[0] <= 'z' ||
-		line[0] >= 'A' && line[0] <= 'Z' || line[0] == '_' || line[0] == '$') {
+	if len(line) == 0 || ((line[0] < 'a' || line[0] > 'z') &&
+		(line[0] < 'A' || line[0] > 'Z') && line[0] != '_' && line[0] != '$') {
 		return "", false
 	}
 	line = line[:min(len(line), size)]
@@ -189,7 +189,7 @@ func (b *hunkBuilder) empty(i int) bool {
 }
 
 // Hunks returns unified hunks whose line contents refer to the original inputs.
-// NoHunkHeader affects WriteUnified only.
+// NoHunkHeader affects Emit and WriteUnified only.
 func (r *Result) Hunks(ctx context.Context, options *EmitOptions) ([]Hunk, error) {
 	opts, err := emitOptions(ctx, options)
 	if err != nil {

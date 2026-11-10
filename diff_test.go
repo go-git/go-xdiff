@@ -129,7 +129,7 @@ func TestDiffReleasesScratch(t *testing.T) {
 			if _, err := r.Hunks(t.Context(), &EmitOptions{Context: 1}); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.WriteUnified(t.Context(), io.Discard, nil); err != nil {
+			if err := WriteUnified(t.Context(), io.Discard, r, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -340,7 +340,7 @@ func FuzzDiff(f *testing.F) {
 				t.Fatalf("hunk outside inputs: %+v", h.Change)
 			}
 		}
-		if err := r.WriteUnified(context.Background(), io.Discard, &emit); err != nil {
+		if err := WriteUnified(context.Background(), io.Discard, r, &emit); err != nil {
 			t.Fatal(err)
 		}
 	})

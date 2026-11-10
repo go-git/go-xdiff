@@ -11,6 +11,8 @@ import (
 	"strconv"
 )
 
+const noNewlineMarker = "\n\\ No newline at end of file\n"
+
 func appendRange(buf []byte, start, count int) []byte {
 	if count != 0 {
 		start++
@@ -35,55 +37,95 @@ func hunkHeader(h Hunk) []byte {
 	return append(header, '\n')
 }
 
-// WriteUnified writes unified hunks without file headers.
-// It returns writer errors and reports incomplete writes as io.ErrShortWrite.
-func (r *Result) WriteUnified(ctx context.Context, w io.Writer, options *EmitOptions) error {
+// Emit sends unified output without file headers to callbacks.
+// It requires a non-nil LineFunc, even when the result has no changes.
+// It checks cancellation before and after each callback.
+func (r *Result) Emit(ctx context.Context, options *EmitOptions, callbacks *EmitCallbacks) error {
 	opts, err := emitOptions(ctx, options)
 	if err != nil {
 		return err
 	}
-	if w == nil {
-		return errors.New("xdiff: nil writer")
+	if callbacks == nil || callbacks.LineFunc == nil {
+		return errors.New("xdiff: nil line callback")
 	}
-	write := func(data []byte) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		n, err := w.Write(data)
-		if err != nil {
-			return err
-		}
-		if n != len(data) {
-			return io.ErrShortWrite
-		}
-		return ctx.Err()
-	}
+	headerFunc, lineFunc := callbacks.HunkHeaderFunc, callbacks.LineFunc
+	var parts [3][]byte
+	var prefix [1]byte
+	var marker []byte
 	return r.eachHunk(ctx, opts, func(h Hunk) error {
 		if !opts.NoHunkHeader {
-			if err := write(hunkHeader(h)); err != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var err error
+			if headerFunc != nil {
+				err = headerFunc(h)
+			} else {
+				parts[0] = hunkHeader(h)
+				err = lineFunc(parts[:1]...)
+			}
+			if err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
 		for _, line := range h.Lines {
-			prefix := byte(' ')
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			prefix[0] = ' '
 			switch line.Operation {
 			case Delete:
-				prefix = '-'
+				prefix[0] = '-'
 			case Insert:
-				prefix = '+'
+				prefix[0] = '+'
 			}
-			if err := write([]byte{prefix}); err != nil {
-				return err
-			}
-			if err := write(line.Content); err != nil {
-				return err
-			}
+			parts[0], parts[1] = prefix[:], line.Content
+			count := 2
 			if len(line.Content) > 0 && line.Content[len(line.Content)-1] != '\n' {
-				if err := write([]byte("\n\\ No newline at end of file\n")); err != nil {
-					return err
+				if marker == nil {
+					marker = []byte(noNewlineMarker)
 				}
+				parts[2] = marker
+				count++
+			}
+			if err := lineFunc(parts[:count]...); err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 		}
 		return nil
+	})
+}
+
+// WriteUnified writes unified hunks without file headers through result.Emit.
+// It returns writer errors and reports incomplete writes as io.ErrShortWrite.
+func WriteUnified(ctx context.Context, w io.Writer, result *Result, options *EmitOptions) error {
+	if w == nil {
+		return errors.New("xdiff: nil writer")
+	}
+	return result.Emit(ctx, options, &EmitCallbacks{
+		LineFunc: func(parts ...[]byte) error {
+			// Emit checks cancellation before the first part and after the last.
+			for i, part := range parts {
+				if i > 0 {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+				n, err := w.Write(part)
+				if err != nil {
+					return err
+				}
+				if n != len(part) {
+					return io.ErrShortWrite
+				}
+			}
+			return nil
+		},
 	})
 }

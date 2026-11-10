@@ -36,7 +36,7 @@ func compareOutput(t *testing.T, ref *testref.Oracle, a, b []byte, opts Options,
 		EmitFlags: flags, Anchors: opts.Anchors, IgnorePatterns: patterns,
 	})
 	var got bytes.Buffer
-	if err := r.WriteUnified(context.Background(), &got, &emit); err != nil {
+	if err := WriteUnified(context.Background(), &got, r, &emit); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got.Bytes(), want) {
@@ -176,7 +176,7 @@ func TestOutputFiltersDoNotChangeScript(t *testing.T) {
 		if err != nil || len(hunks) != 0 {
 			t.Fatalf("suppressed hunks: %v, %v", hunks, err)
 		}
-		if err := r.WriteUnified(context.Background(), io.Discard, nil); err != nil {
+		if err := WriteUnified(context.Background(), io.Discard, r, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -210,7 +210,7 @@ func TestFunctionNames(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		emit := EmitOptions{FunctionNames: true, FindFunction: tc.find}
+		emit := EmitOptions{FunctionNames: true, FindFunc: tc.find}
 		hunks, err := r.Hunks(context.Background(), &emit)
 		if err != nil {
 			t.Fatal(err)
@@ -283,21 +283,28 @@ func TestOutputErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	callbacks := EmitCallbacks{LineFunc: func(...[]byte) error { return nil }}
 	for _, emit := range []*EmitOptions{{Context: -1}, {InterHunkContext: -1}} {
 		if _, err := r.Hunks(context.Background(), emit); err == nil {
 			t.Fatal("accepted negative context")
 		}
-		if err := r.WriteUnified(context.Background(), io.Discard, emit); err == nil {
+		if err := WriteUnified(context.Background(), io.Discard, r, emit); err == nil {
 			t.Fatal("writer accepted negative context")
+		}
+		if err := r.Emit(t.Context(), emit, &callbacks); err == nil {
+			t.Fatal("emitter accepted negative context")
 		}
 	}
 	if _, err := r.Hunks(nil, nil); err == nil {
 		t.Fatal("accepted nil context")
 	}
-	if err := r.WriteUnified(nil, io.Discard, nil); err == nil {
+	if err := WriteUnified(nil, io.Discard, r, nil); err == nil {
 		t.Fatal("writer accepted nil context")
 	}
-	if err := r.WriteUnified(context.Background(), nil, nil); err == nil {
+	if err := r.Emit(nil, nil, &callbacks); err == nil {
+		t.Fatal("emitter accepted nil context")
+	}
+	if err := WriteUnified(context.Background(), nil, r, nil); err == nil {
 		t.Fatal("accepted nil writer")
 	}
 	failure := errors.New("writer failure")
@@ -306,16 +313,151 @@ func TestOutputErrors(t *testing.T) {
 		want   error
 	}{{outputWriter{err: failure}, failure}, {outputWriter{short: true}, io.ErrShortWrite},
 		{outputWriter{short: true, err: failure}, failure}} {
-		if err := r.WriteUnified(context.Background(), tc.writer, nil); !errors.Is(err, tc.want) {
+		if err := WriteUnified(context.Background(), tc.writer, r, nil); !errors.Is(err, tc.want) {
 			t.Fatalf("write error: %v, want %v", err, tc.want)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := r.WriteUnified(ctx, outputWriter{cancel: cancel}, nil); !errors.Is(err, context.Canceled) {
+	if err := WriteUnified(ctx, outputWriter{cancel: cancel}, r, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("writer cancellation: %v", err)
 	}
 	if _, err := r.Hunks(ctx, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("hunk cancellation: %v", err)
+	}
+}
+
+func TestEmitCallbacks(t *testing.T) {
+	old, new := []byte("head\nold"), []byte("head\nnew")
+	r, err := Diff(t.Context(), old, new, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, customHeader := range []bool{false, true} {
+		for _, noHeader := range []bool{false, true} {
+			t.Run(fmt.Sprintf("custom=%v/noHeader=%v", customHeader, noHeader), func(t *testing.T) {
+				opts := EmitOptions{Context: 1, NoHunkHeader: noHeader}
+				before := opts
+				var got [][]string
+				headerCalls := 0
+				callbacks := EmitCallbacks{
+					LineFunc: func(parts ...[]byte) error {
+						record := make([]string, len(parts))
+						for i, part := range parts {
+							record[i] = string(part)
+						}
+						got = append(got, record)
+						if len(parts) > 1 {
+							content := new
+							if parts[0][0] == '-' {
+								content = old
+							}
+							offset := 5
+							if parts[0][0] == ' ' {
+								offset = 0
+							}
+							if &parts[1][0] != &content[offset] {
+								t.Fatal("record content does not reference the input")
+							}
+						}
+						return nil
+					},
+				}
+				if customHeader {
+					callbacks.HunkHeaderFunc = func(h Hunk) error {
+						headerCalls++
+						if h.Change != (Change{0, 2, 0, 2}) || len(h.Lines) != 3 {
+							t.Fatalf("header received unexpected hunk: %+v", h)
+						}
+						return nil
+					}
+				}
+				if err := r.Emit(t.Context(), &opts, &callbacks); err != nil {
+					t.Fatal(err)
+				}
+				want := [][]string{
+					{" ", "head\n"},
+					{"-", "old", "\n\\ No newline at end of file\n"},
+					{"+", "new", "\n\\ No newline at end of file\n"},
+				}
+				if !customHeader && !noHeader {
+					want = append([][]string{{"@@ -1,2 +1,2 @@\n"}}, want...)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("parts = %q, want %q", got, want)
+				}
+				wantHeaders := 0
+				if customHeader && !noHeader {
+					wantHeaders = 1
+				}
+				if headerCalls != wantHeaders {
+					t.Fatalf("header calls = %d, want %d", headerCalls, wantHeaders)
+				}
+				if !reflect.DeepEqual(opts, before) || string(old) != "head\nold" || string(new) != "head\nnew" {
+					t.Fatal("emission modified options or inputs")
+				}
+			})
+		}
+	}
+}
+
+func TestEmitInvalidCallbacks(t *testing.T) {
+	for _, new := range []string{"old\n", "new\n"} {
+		r, err := Diff(t.Context(), []byte("old\n"), []byte(new), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, callbacks := range []*EmitCallbacks{nil, {}, {
+			HunkHeaderFunc: func(Hunk) error {
+				t.Fatal("header called without a line callback")
+				return nil
+			},
+		}} {
+			if err := r.Emit(t.Context(), nil, callbacks); err == nil {
+				t.Fatal("accepted a missing line callback")
+			}
+		}
+	}
+}
+
+func TestEmitCallbackStops(t *testing.T) {
+	r, err := Diff(t.Context(), []byte("head\nold"), []byte("head\nnew"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("callback failure")
+	for _, customHeader := range []bool{false, true} {
+		for _, cancelCallback := range []bool{false, true} {
+			for stopAt := 1; stopAt <= 4; stopAt++ {
+				t.Run(fmt.Sprintf("custom=%v/cancel=%v/at=%d", customHeader, cancelCallback, stopAt), func(t *testing.T) {
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					calls := 0
+					consume := func() error {
+						calls++
+						if calls == stopAt {
+							if cancelCallback {
+								cancel()
+								return nil
+							}
+							return failure
+						}
+						return nil
+					}
+					callbacks := EmitCallbacks{LineFunc: func(...[]byte) error { return consume() }}
+					if customHeader {
+						callbacks.HunkHeaderFunc = func(Hunk) error { return consume() }
+					}
+					err := r.Emit(ctx, &EmitOptions{Context: 1}, &callbacks)
+					want := failure
+					if cancelCallback {
+						want = context.Canceled
+					}
+					if !errors.Is(err, want) || calls != stopAt {
+						t.Fatalf("error = %v, calls = %d; want %v at %d", err, calls, want, stopAt)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -360,13 +502,13 @@ func TestOutputIgnoredChangeGroups(t *testing.T) {
 	}
 }
 
-func ExampleResult_WriteUnified() {
+func ExampleWriteUnified() {
 	result, err := Diff(context.Background(), []byte("one\nold\n"), []byte("one\nnew\n"), nil)
 	if err != nil {
 		panic(err)
 	}
 	var output bytes.Buffer
-	if err := result.WriteUnified(context.Background(), &output, &EmitOptions{Context: 1}); err != nil {
+	if err := WriteUnified(context.Background(), &output, result, &EmitOptions{Context: 1}); err != nil {
 		panic(err)
 	}
 	fmt.Print(output.String())
@@ -392,13 +534,13 @@ func ExampleResult_Hunks() {
 	// Output: {0 5 0 5}
 }
 
-func ExampleResult_WriteUnified_functionNames() {
+func ExampleWriteUnified_functionNames() {
 	result, err := Diff(context.Background(), []byte("function\n old\n}\n"), []byte("function\n new\n}\n"), nil)
 	if err != nil {
 		panic(err)
 	}
 	var output bytes.Buffer
-	if err := result.WriteUnified(context.Background(), &output, &EmitOptions{FunctionNames: true}); err != nil {
+	if err := WriteUnified(context.Background(), &output, result, &EmitOptions{FunctionNames: true}); err != nil {
 		panic(err)
 	}
 	fmt.Print(output.String())
@@ -408,17 +550,17 @@ func ExampleResult_WriteUnified_functionNames() {
 	// + new
 }
 
-func ExampleResult_WriteUnified_functionContext() {
+func ExampleWriteUnified_functionContext() {
 	result, err := Diff(context.Background(), []byte("@name\n old\n}\n"), []byte("@name\n new\n}\n"), nil)
 	if err != nil {
 		panic(err)
 	}
 	emit := EmitOptions{FunctionContext: true, NoHunkHeader: true,
-		FindFunction: func(line []byte) (string, bool) {
+		FindFunc: func(line []byte) (string, bool) {
 			return strings.TrimSpace(string(line)), len(line) > 0 && line[0] == '@'
 		}}
 	var output bytes.Buffer
-	if err := result.WriteUnified(context.Background(), &output, &emit); err != nil {
+	if err := WriteUnified(context.Background(), &output, result, &emit); err != nil {
 		panic(err)
 	}
 	fmt.Print(output.String())
@@ -455,7 +597,7 @@ func ExampleResult_Hunks_findFunction() {
 	}
 	hunks, err := result.Hunks(context.Background(), &EmitOptions{
 		FunctionNames: true,
-		FindFunction: func(line []byte) (string, bool) {
+		FindFunc: func(line []byte) (string, bool) {
 			return "custom name", bytes.HasPrefix(line, []byte("@"))
 		},
 	})

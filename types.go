@@ -66,15 +66,29 @@ type Chunk struct {
 	Old, New  []byte
 }
 
-// EmitOptions controls hunk construction. Zero values request no context.
+// EmitOptions controls hunk construction and emission. Zero values request no context.
 type EmitOptions struct {
 	Context, InterHunkContext int
 	NoHunkHeader              bool
 	FunctionNames             bool
 	FunctionContext           bool
-	// FindFunction identifies a function header and its display name.
+	// FindFunc identifies a function header and its display name.
 	// A nil callback uses xdiff's default ASCII header detection.
-	FindFunction func(line []byte) (name string, ok bool)
+	FindFunc func(line []byte) (name string, ok bool)
+}
+
+// EmitCallbacks receives unified output without file headers.
+// Callbacks return an error to stop emission.
+type EmitCallbacks struct {
+	// HunkHeaderFunc replaces the standard hunk header.
+	// When nil, LineFunc receives the formatted header as one part.
+	// NoHunkHeader suppresses both header paths.
+	HunkHeaderFunc func(Hunk) error
+	// LineFunc receives a record's prefix, original content, and optional
+	// missing-newline notice as separate parts. It also receives default headers.
+	// LineFunc is required. The parts and their bytes are borrowed:
+	// do not modify them or retain them after the callback returns.
+	LineFunc func(parts ...[]byte) error
 }
 
 // Line is an output line, including its original newline if present.

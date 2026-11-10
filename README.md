@@ -29,7 +29,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := result.WriteUnified(ctx, os.Stdout, &xdiff.EmitOptions{Context: 3}); err != nil {
+	if err := xdiff.WriteUnified(ctx, os.Stdout, result, &xdiff.EmitOptions{Context: 3}); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -43,7 +43,19 @@ The result provides:
 - `Changes()` for replacements with zero-based line offsets.
 - `Chunks()` for equal, delete, and insert byte ranges.
 - `Hunks()` for structured unified hunks.
-- `WriteUnified()` for unified output without file headers.
+- `Emit()` for callback-based unified output without file headers.
+
+Use the package-level `WriteUnified()` helper for output to an `io.Writer`.
+For custom output, pass `EmitCallbacks` to `Emit()`.
+`LineFunc` receives separate prefix, content, and optional missing-newline notice parts.
+It receives each standard hunk header as one part.
+The parts and their bytes are borrowed. Do not modify or retain them.
+
+An optional `HunkHeaderFunc` replaces the standard header and receives a `Hunk` with zero-based ranges.
+`NoHunkHeader` suppresses both header paths.
+`LineFunc` is required, even when there are no changes.
+Callbacks return errors to stop emission. `Emit()` checks cancellation before and after each callback.
+The caller controls colors and terminal detection.
 
 ## Merge
 
