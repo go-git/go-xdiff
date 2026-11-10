@@ -22,6 +22,7 @@ type mergeChange struct {
 
 type mergeList struct {
 	head, tail *mergeChange
+	storage    []mergeChange
 }
 
 func (l *mergeList) append(mode, i0, chg0, i1, chg1, i2, chg2 int) {
@@ -35,7 +36,9 @@ func (l *mergeList) append(mode, i0, chg0, i1, chg1, i2, chg2 int) {
 		m.chg2 = i2 + chg2 - m.i2
 		return
 	}
-	m = &mergeChange{mode: mode, i0: i0, chg0: chg0,
+	m = &l.storage[0]
+	l.storage = l.storage[1:]
+	*m = mergeChange{mode: mode, i0: i0, chg0: chg0,
 		i1: i1, chg1: chg1, i2: i2, chg2: chg2}
 	if l.tail == nil {
 		l.head = m
@@ -102,6 +105,9 @@ func Merge(ctx context.Context, base, ours, theirs []byte, options *MergeOptions
 		if len(left.changes) == 0 {
 			data = theirs
 		}
+		if len(data) > 0 {
+			output.data = make([]byte, 0, len(data))
+		}
 		if err := output.copy(data); err != nil {
 			return nil, err
 		}
@@ -141,7 +147,7 @@ func (m *merger) equalLines(i1, i2, count int) (bool, error) {
 
 func (m *merger) changes() (*mergeChange, error) {
 	left, right := m.ours.changes, m.theirs.changes
-	var list mergeList
+	list := mergeList{storage: make([]mergeChange, len(left)+len(right))}
 	for len(left) > 0 && len(right) > 0 {
 		if err := m.ctx.Err(); err != nil {
 			return nil, err
@@ -269,12 +275,14 @@ func (m *merger) refine(c *mergeChange) error {
 			c.mode = 4
 			continue
 		}
+		extra := make([]mergeChange, len(r.changes)-1)
 		for i, change := range r.changes {
 			if err := m.ctx.Err(); err != nil {
 				return err
 			}
 			if i > 0 {
-				next := &mergeChange{next: c.next}
+				next := &extra[i-1]
+				next.next = c.next
 				c.next = next
 				c = next
 			}
@@ -360,8 +368,18 @@ func (m *merger) needsCR(c *mergeChange) bool {
 }
 
 type mergeOutput struct {
-	ctx  context.Context
-	data []byte
+	ctx       context.Context
+	data      []byte
+	countOnly bool
+	size      int
+}
+
+func (o *mergeOutput) byte(c byte) {
+	if o.countOnly {
+		o.size++
+	} else {
+		o.data = append(o.data, c)
+	}
 }
 
 func (o *mergeOutput) copy(data []byte) error {
@@ -370,7 +388,11 @@ func (o *mergeOutput) copy(data []byte) error {
 			return err
 		}
 		n := min(len(data), 65536)
-		o.data = append(o.data, data[:n]...)
+		if o.countOnly {
+			o.size += n
+		} else {
+			o.data = append(o.data, data[:n]...)
+		}
 		data = data[n:]
 	}
 	return o.ctx.Err()
@@ -386,9 +408,9 @@ func (o *mergeOutput) records(f *file, start, count int, cr, addNL bool) error {
 	}
 	if addNL && (len(data) == 0 || data[len(data)-1] != '\n') {
 		if cr {
-			o.data = append(o.data, '\r')
+			o.byte('\r')
 		}
-		o.data = append(o.data, '\n')
+		o.byte('\n')
 	}
 	return nil
 }
@@ -409,7 +431,7 @@ func (o *mergeOutput) marker(c byte, size int, label string, cr bool) error {
 		label = label[:i]
 	}
 	if label != "" {
-		o.data = append(o.data, ' ')
+		o.byte(' ')
 		// Copy strings in bounded pieces to preserve cancellation checks.
 		for len(label) > 0 {
 			n := min(len(label), 65536)
@@ -420,17 +442,32 @@ func (o *mergeOutput) marker(c byte, size int, label string, cr bool) error {
 		}
 	}
 	if cr {
-		o.data = append(o.data, '\r')
+		o.byte('\r')
 	}
-	o.data = append(o.data, '\n')
+	o.byte('\n')
 	return nil
 }
 
 func (m *merger) output(changes *mergeChange, o *mergeOutput) (*MergeResult, error) {
+	counter := mergeOutput{ctx: m.ctx, countOnly: true}
+	if _, err := m.writeOutput(changes, &counter); err != nil {
+		return nil, err
+	}
+	if counter.size > 0 {
+		o.data = make([]byte, 0, counter.size)
+	}
+	conflicts, err := m.writeOutput(changes, o)
+	if err != nil {
+		return nil, err
+	}
+	return &MergeResult{Content: o.data, Conflicts: conflicts}, nil
+}
+
+func (m *merger) writeOutput(changes *mergeChange, o *mergeOutput) (int, error) {
 	conflicts, i := 0, 0
 	for c := changes; c != nil; c = c.next {
 		if err := m.ctx.Err(); err != nil {
-			return nil, err
+			return 0, err
 		}
 		mode := c.mode
 		if mode == 0 {
@@ -440,34 +477,34 @@ func (m *merger) output(changes *mergeChange, o *mergeOutput) (*MergeResult, err
 			continue
 		}
 		if err := o.records(&m.ours.b, i, c.i1-i, false, false); err != nil {
-			return nil, err
+			return 0, err
 		}
 		if mode == 0 {
 			conflicts++
 			if err := m.conflict(c, o); err != nil {
-				return nil, err
+				return 0, err
 			}
 		} else {
 			if mode&1 != 0 {
 				if err := o.records(&m.ours.b, c.i1, c.chg1, m.needsCR(c), mode&2 != 0); err != nil {
-					return nil, err
+					return 0, err
 				}
 			}
 			if mode&2 != 0 {
 				if err := o.records(&m.theirs.b, c.i2, c.chg2, false, false); err != nil {
-					return nil, err
+					return 0, err
 				}
 			}
 		}
 		i = c.i1 + c.chg1
 	}
 	if err := o.records(&m.ours.b, i, len(m.ours.b.recs)-i, false, false); err != nil {
-		return nil, err
+		return 0, err
 	}
 	if err := m.ctx.Err(); err != nil {
-		return nil, err
+		return 0, err
 	}
-	return &MergeResult{Content: o.data, Conflicts: conflicts}, nil
+	return conflicts, nil
 }
 
 func (m *merger) conflict(c *mergeChange, o *mergeOutput) error {

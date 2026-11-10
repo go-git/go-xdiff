@@ -76,3 +76,55 @@ func BenchmarkMerge(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkDiffWhitespace(b *testing.B) {
+	old, new, _ := benchmarkInputs()
+	for _, mode := range []Whitespace{IgnoreAllSpace, IgnoreSpaceChange, IgnoreSpaceAtEOL, IgnoreCRAtEOL} {
+		b.Run(fmt.Sprint(mode), func(b *testing.B) {
+			b.ReportAllocs()
+			opts := Options{Whitespace: mode}
+			for b.Loop() {
+				if _, err := Diff(b.Context(), old, new, &opts); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkDiffSpecialInputs(b *testing.B) {
+	old, _, _ := benchmarkInputs()
+	for _, pair := range []struct {
+		name     string
+		old, new []byte
+	}{
+		{"Identical", old, bytes.Clone(old)},
+		{"Insert", nil, old},
+		{"Delete", old, nil},
+		{"Empty", nil, nil},
+	} {
+		for _, algorithm := range []Algorithm{Myers, Patience, Histogram} {
+			b.Run(fmt.Sprintf("%s/%d", pair.name, algorithm), func(b *testing.B) {
+				b.ReportAllocs()
+				opts := Options{Algorithm: algorithm}
+				for b.Loop() {
+					if _, err := Diff(b.Context(), pair.old, pair.new, &opts); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkChunks(b *testing.B) {
+	old, new, _ := benchmarkInputs()
+	result, err := Diff(b.Context(), old, new, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		result.Chunks()
+	}
+}

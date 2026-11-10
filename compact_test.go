@@ -73,7 +73,7 @@ func TestCompactGroupSyncError(t *testing.T) {
 }
 
 func TestMeasureSplitLongBlankRuns(t *testing.T) {
-	classes := make(map[string]int)
+	var classes classifier
 	f, err := readFile(t.Context(), []byte(strings.Repeat("\n", 2*maxBlanks+3)), 0, &classes)
 	if err != nil {
 		t.Fatal(err)
@@ -120,10 +120,28 @@ func TestChangeGroupTraversal(t *testing.T) {
 	}
 }
 
+func TestChangedGroupCount(t *testing.T) {
+	f := myersTestFile([]int{0, 1, 2, 3, 4})
+	for _, op := range []struct {
+		line    int
+		changed bool
+		groups  int
+	}{
+		{0, true, 1}, {2, true, 2}, {1, true, 1}, {1, false, 2},
+		{4, true, 3}, {2, false, 2}, {0, false, 1}, {4, false, 0},
+		{4, false, 0}, {3, true, 1}, {4, true, 1}, {3, false, 1}, {4, false, 0},
+	} {
+		f.setChanged(op.line, op.changed)
+		if f.groups != op.groups {
+			t.Fatalf("line %d, changed %v: %d groups, want %d", op.line, op.changed, f.groups, op.groups)
+		}
+	}
+}
+
 func TestCompactHistogramRediff(t *testing.T) {
 	for _, swapped := range []bool{false, true} {
 		ctx := context.Background()
-		classes := make(map[string]int)
+		var classes classifier
 		a, err := readFile(ctx, []byte("a\na\na\n"), 0, &classes)
 		if err != nil {
 			t.Fatal(err)

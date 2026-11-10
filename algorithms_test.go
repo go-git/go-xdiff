@@ -187,6 +187,39 @@ func TestMyersHeuristicsReference(t *testing.T) {
 	}
 }
 
+func TestFallbackRecordIDs(t *testing.T) {
+	for _, mode := range []Whitespace{0, IgnoreAllSpace, IgnoreSpaceChange, IgnoreSpaceAtEOL, IgnoreCRAtEOL} {
+		opts := Options{Algorithm: Patience, Whitespace: mode}
+		e, err := prepare(t.Context(), []byte("prefix\n a\nb\n a\nsuffix\n"),
+			[]byte("other\nb\n a\n b\nend\n"), opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := prepare(t.Context(), e.a.region(1, 3), e.b.region(1, 3), Options{Whitespace: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := want.myers(); err != nil {
+			t.Fatal(err)
+		}
+		if err := fallbackDiff(t.Context(), &e.a, 1, 3, &e.b, 1, 3, opts); err != nil {
+			t.Fatal(err)
+		}
+		for pass, got := range []*file{&e.a, &e.b} {
+			expected := &want.a
+			if pass == 1 {
+				expected = &want.b
+			}
+			for i := range got.recs {
+				changed := i >= 1 && i < 4 && expected.isChanged(i-1)
+				if got.isChanged(i) != changed {
+					t.Fatalf("mode %d, file %d, line %d: changed %v, want %v", mode, pass, i, got.isChanged(i), changed)
+				}
+			}
+		}
+	}
+}
+
 type algorithmCancelContext struct {
 	context.Context
 	remaining int

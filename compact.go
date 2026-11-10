@@ -305,7 +305,11 @@ func (e *environment) compactFile(f, other *file) error {
 }
 
 func (e *environment) script() []Change {
-	var changes []Change
+	count := max(e.a.groups, e.b.groups)
+	if count == 0 {
+		return nil
+	}
+	changes := make([]Change, 0, count)
 	for i1, i2 := len(e.a.recs), len(e.b.recs); i1 >= 0 || i2 >= 0; i1, i2 = i1-1, i2-1 {
 		if e.a.isChanged(i1-1) || e.b.isChanged(i2-1) {
 			l1, l2 := i1, i2

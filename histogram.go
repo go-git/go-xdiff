@@ -48,6 +48,7 @@ package xdiff
 import (
 	"fmt"
 	"math/bits"
+	"slices"
 )
 
 const histogramMaxChain = 64
@@ -65,6 +66,7 @@ type histogramIndex struct {
 	bits    int
 	count   int
 	common  bool
+	records []histogramRecord
 }
 
 type histogramRegion struct {
@@ -116,13 +118,15 @@ func (e *environment) histogramRange(ai, an, bi, bn int) error {
 
 func (e *environment) histogramLCS(ai, an, bi, bn int) (histogramRegion, bool, error) {
 	var lcs histogramRegion
-	h := histogramIndex{
-		lines: make([]*histogramRecord, an),
-		next:  make([]int, an), shift: ai,
-		bits: max(1, bits.Len(uint(an-1))), count: histogramMaxChain + 1,
-	}
-	h.buckets = make([]*histogramRecord, 1<<h.bits)
-	records := make([]histogramRecord, an)
+	h := &e.histogramScratch
+	h.lines = slices.Grow(h.lines[:0], an)[:an]
+	h.next = slices.Grow(h.next[:0], an)[:an]
+	h.records = slices.Grow(h.records[:0], an)[:an]
+	h.shift, h.bits, h.count, h.common = ai, max(1, bits.Len(uint(an-1))), histogramMaxChain+1, false
+	size := 1 << h.bits
+	h.buckets = slices.Grow(h.buckets[:0], size)[:size]
+	clear(h.buckets)
+	clear(h.records)
 	for ptr := ai + an - 1; ptr >= ai; ptr-- {
 		if err := e.ctx.Err(); err != nil {
 			return lcs, false, err
@@ -146,7 +150,7 @@ func (e *environment) histogramLCS(ai, an, bi, bn int) (histogramRegion, bool, e
 			if chain == histogramMaxChain {
 				return lcs, false, fmt.Errorf("xdiff: histogram hash chain exceeds %d records", histogramMaxChain)
 			}
-			rec = &records[ptr-ai]
+			rec = &h.records[ptr-ai]
 			*rec = histogramRecord{ptr: ptr, count: 1, next: h.buckets[bucket]}
 			h.buckets[bucket] = rec
 		}
@@ -156,7 +160,7 @@ func (e *environment) histogramLCS(ai, an, bi, bn int) (histogramRegion, bool, e
 		if err := e.ctx.Err(); err != nil {
 			return lcs, false, err
 		}
-		next, err := e.histogramTry(&h, &lcs, ptr, ai, an, bi, bn)
+		next, err := e.histogramTry(h, &lcs, ptr, ai, an, bi, bn)
 		if err != nil {
 			return lcs, false, err
 		}

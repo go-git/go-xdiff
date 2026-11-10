@@ -39,7 +39,11 @@ func TestDiffCancellationAtEveryCheck(t *testing.T) {
 		{"changed-ends", "old\nsame\nold\n", "new\nsame\nnew\n"},
 		{"recursive-anchors", "start\nold\nanchor-one\nanchor-two\nend\n", "start\nnew\nanchor-one\nanchor-two\nend\n"},
 		{"repeated-replacement", "a\na\na\n", "b\na\na\n"},
-		{"repeated-common-tail", "anchor\nsame\nsame\n", "anchor\nsame\nsame\n"},
+		{"repeated-common-tail", "old\nanchor\nsame\nsame\n", "new\nanchor\nsame\nsame\n"},
+		{"identical", "same\nsame\n", "same\nsame\n"},
+		{"insert", "", "new\nnew"},
+		{"delete", "old\nold", ""},
+		{"empty", "", ""},
 	} {
 		for _, algorithm := range []Algorithm{Myers, Patience, Histogram} {
 			t.Run(fmt.Sprintf("%s/%d", pair.name, algorithm), func(t *testing.T) {
@@ -153,7 +157,7 @@ func TestMyersLongSnakeCancellation(t *testing.T) {
 }
 
 func TestCompactRediffCancellation(t *testing.T) {
-	classes := make(map[string]int)
+	var classes classifier
 	a, err := readFile(t.Context(), []byte("a\na\na\n"), 0, &classes)
 	if err != nil {
 		t.Fatal(err)

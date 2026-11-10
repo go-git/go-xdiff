@@ -84,6 +84,109 @@ func TestDiffRecordRegions(t *testing.T) {
 	}
 }
 
+func TestClassifierCollisions(t *testing.T) {
+	c := classifier{buckets: make([]int, 16)}
+	for _, tc := range []struct {
+		key  string
+		want int
+	}{
+		{"first\n", 0}, {"\x00\xff\n", 1}, {"third", 2},
+		{"first\n", 0}, {"third", 2}, {"\x00\xff\n", 1},
+	} {
+		if got := c.intern(7, []byte(tc.key), 3, false); got != tc.want {
+			t.Fatalf("class for %q = %d, want %d", tc.key, got, tc.want)
+		}
+	}
+	for i := 0; i < 64; i++ {
+		key := fmt.Appendf(nil, "collision-%d\n", i)
+		if got := c.intern(7, key, 3, false); got != i+3 {
+			t.Fatalf("new collision %d: class %d", i, got)
+		}
+	}
+	for i := 63; i >= 0; i-- {
+		key := fmt.Appendf(nil, "collision-%d\n", i)
+		if got := c.intern(7, key, 3, false); got != i+3 {
+			t.Fatalf("existing collision %d: class %d", i, got)
+		}
+	}
+}
+
+func TestDiffReleasesScratch(t *testing.T) {
+	for _, algorithm := range []Algorithm{Myers, Patience, Histogram} {
+		for _, pair := range [][2]string{
+			{"a\nb\na\n", "a\nc\na\n"}, {"same\nsame", "same\nsame"},
+			{"", "a\nb"}, {"a\nb", ""}, {"", ""},
+		} {
+			a, b := []byte(pair[0]), []byte(pair[1])
+			r, err := Diff(t.Context(), a, b, &Options{Algorithm: algorithm})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.a.changed != nil || r.b.changed != nil || r.a.refs != nil || r.b.refs != nil {
+				t.Fatal("result retained algorithm scratch")
+			}
+			checkChunks(t, a, b, r)
+			if _, err := r.Hunks(t.Context(), &EmitOptions{Context: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.WriteUnified(t.Context(), io.Discard, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestWhitespaceClassReuse(t *testing.T) {
+	lines := []string{" a \n", "\ta\t\n", "a\n", "a", "a\r\n", "a\vb\n", "ab\n"}
+	for mode := Whitespace(0); mode < 16; mode++ {
+		want := []int{0, 1, 2, 3, 4, 5, 6}
+		switch {
+		case mode&IgnoreAllSpace != 0:
+			want = []int{0, 0, 0, 0, 0, 1, 2}
+		case mode&IgnoreSpaceChange != 0:
+			want = []int{0, 0, 1, 1, 1, 2, 3}
+		case mode != 0:
+			want = []int{0, 1, 2, 2, 2, 3, 4}
+		}
+		var classes classifier
+		for i, line := range lines {
+			f, err := readFile(t.Context(), []byte(line), mode, &classes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.recs[0].id != want[i] {
+				t.Fatalf("mode %d, line %q: class %d, want %d", mode, line, f.recs[0].id, want[i])
+			}
+		}
+	}
+}
+
+func TestNormalizedClassBlocks(t *testing.T) {
+	var old, new bytes.Buffer
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&old, "line %04d repeated content\n", i)
+	}
+	for i := 299; i >= 0; i-- {
+		fmt.Fprintf(&new, "line  %04d  repeated\tcontent \r\n", i)
+	}
+	for _, mode := range []Whitespace{IgnoreAllSpace, IgnoreSpaceChange} {
+		var classes classifier
+		a, err := readFile(t.Context(), old.Bytes(), mode, &classes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := readFile(t.Context(), new.Bytes(), mode, &classes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range a.recs {
+			if a.recs[i].id != i || b.recs[299-i].id != i {
+				t.Fatalf("mode %d, line %d: class keys did not survive block reuse", mode, i)
+			}
+		}
+	}
+}
+
 func TestOptionsAndCancellation(t *testing.T) {
 	options := Options{Anchors: []string{"a"}, IgnoreRegex: []*regexp.Regexp{regexp.MustCompile("x")}}
 	before := options

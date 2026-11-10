@@ -5,6 +5,7 @@
 package xdiff
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -56,6 +57,9 @@ func Diff(ctx context.Context, old, new []byte, options *Options) (*Result, erro
 	if err := validateOptions(opts); err != nil {
 		return nil, err
 	}
+	if len(old) == 0 || len(new) == 0 || bytes.Equal(old, new) {
+		return simpleDiff(ctx, old, new, opts)
+	}
 	e, err := prepare(ctx, old, new, opts)
 	if err != nil {
 		return nil, err
@@ -77,7 +81,32 @@ func Diff(ctx context.Context, old, new []byte, options *Options) (*Result, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Result{a: e.a, b: e.b, changes: e.script(), opts: opts}, nil
+	changes := e.script()
+	e.a.changed, e.a.refs, e.b.changed, e.b.refs = nil, nil, nil, nil
+	return &Result{a: e.a, b: e.b, changes: changes, opts: opts}, nil
+}
+
+func simpleDiff(ctx context.Context, old, new []byte, opts Options) (*Result, error) {
+	a, err := readFile(ctx, old, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	b := a
+	b.data = new
+	var changes []Change
+	if len(old) == 0 || len(new) == 0 {
+		b, err = readFile(ctx, new, 0, nil)
+		if err != nil {
+			return nil, err
+		}
+		if len(a.recs) != 0 || len(b.recs) != 0 {
+			changes = []Change{{OldLines: len(a.recs), NewLines: len(b.recs)}}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &Result{a: a, b: b, changes: changes, opts: opts}, nil
 }
 
 // Changes returns an independent copy of the compacted edit script.
@@ -89,8 +118,27 @@ func (r *Result) Changes() []Change {
 // Chunks returns equal, delete, and insert chunks in source order.
 // Each chunk refers to the original input bytes.
 func (r *Result) Chunks() []Chunk {
-	var chunks []Chunk
-	a, b := 0, 0
+	count, a, b := 0, 0, 0
+	for _, c := range r.changes {
+		if c.OldStart > a || c.NewStart > b {
+			count++
+		}
+		if c.OldLines > 0 {
+			count++
+		}
+		if c.NewLines > 0 {
+			count++
+		}
+		a, b = c.OldStart+c.OldLines, c.NewStart+c.NewLines
+	}
+	if a < len(r.a.recs) || b < len(r.b.recs) {
+		count++
+	}
+	if count == 0 {
+		return nil
+	}
+	chunks := make([]Chunk, 0, count)
+	a, b = 0, 0
 	for _, c := range r.changes {
 		if c.OldStart > a || c.NewStart > b {
 			chunks = append(chunks, Chunk{Equal,

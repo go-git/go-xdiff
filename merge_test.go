@@ -287,7 +287,7 @@ func TestMergeIncompleteLineEndings(t *testing.T) {
 		{"first\nlast", 0},
 		{"last", -1},
 	} {
-		classes := make(map[string]int)
+		var classes classifier
 		f, err := readFile(t.Context(), []byte(tc.text), 0, &classes)
 		if err != nil {
 			t.Fatal(err)

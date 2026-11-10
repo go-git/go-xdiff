@@ -57,8 +57,9 @@ func (e *environment) myers() error {
 		}
 	}
 	ndiags := len(e.a.refs) + len(e.b.refs) + 3
+	diags := make([]int, 2*ndiags)
 	s := myersState{
-		e: e, forward: make([]int, ndiags), backward: make([]int, ndiags),
+		e: e, forward: diags[:ndiags:ndiags], backward: diags[ndiags:],
 		base: len(e.b.refs) + 1, maxCost: max(myersMaxCostMin, bogosqrt(ndiags)),
 	}
 	return s.compare(0, len(e.a.refs), 0, len(e.b.refs), e.opts.Minimal)

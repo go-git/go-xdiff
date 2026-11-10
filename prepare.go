@@ -7,13 +7,14 @@ package xdiff
 import "context"
 
 type environment struct {
-	a, b file
-	opts Options
-	ctx  context.Context
+	a, b             file
+	opts             Options
+	ctx              context.Context
+	histogramScratch histogramIndex
 }
 
 func prepare(ctx context.Context, a, b []byte, opts Options) (*environment, error) {
-	classes := make(map[string]int)
+	var classes classifier
 	left, err := readFile(ctx, a, opts.Whitespace, &classes)
 	if err != nil {
 		return nil, err
@@ -25,7 +26,7 @@ func prepare(ctx context.Context, a, b []byte, opts Options) (*environment, erro
 	e := &environment{a: left, b: right, opts: opts, ctx: ctx}
 	if opts.Algorithm == Myers {
 		e.trim()
-		if err := e.cleanup(len(classes)); err != nil {
+		if err := e.cleanup(len(classes.entries)); err != nil {
 			return nil, err
 		}
 	}
@@ -127,8 +128,35 @@ func (e *environment) cleanup(classCount int) error {
 
 func fallbackDiff(ctx context.Context, a *file, ai, an int, b *file, bi, bn int, opts Options) error {
 	opts.Algorithm, opts.Minimal, opts.Anchors = Myers, false, nil
-	e, err := prepare(ctx, a.region(ai, an), b.region(bi, bn), opts)
-	if err != nil {
+	e := environment{ctx: ctx, opts: opts}
+	classes := make(map[int]int)
+	for pass, source := range []*file{a, b} {
+		start, count, target := ai, an, &e.a
+		if pass == 1 {
+			start, count, target = bi, bn, &e.b
+		}
+		target.data = source.region(start, count)
+		target.recs = make([]record, count)
+		target.changed = make([]bool, count+2)
+		target.end = count - 1
+		offset := len(source.data)
+		if start < len(source.recs) {
+			offset = source.recs[start].start
+		}
+		for i, r := range source.recs[start : start+count] {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			id, found := classes[r.id]
+			if !found {
+				id = len(classes)
+				classes[r.id] = id
+			}
+			target.recs[i] = record{id: id, start: r.start - offset}
+		}
+	}
+	e.trim()
+	if err := e.cleanup(len(classes)); err != nil {
 		return err
 	}
 	if err := e.myers(); err != nil {
