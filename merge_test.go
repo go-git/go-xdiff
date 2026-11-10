@@ -258,6 +258,46 @@ func TestMergeLoopCancellation(t *testing.T) {
 	}
 }
 
+func TestMergeRefineIdenticalRegion(t *testing.T) {
+	r, err := Diff(t.Context(), []byte("base\n"), []byte("same\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := merger{ctx: t.Context(), ours: r, theirs: r}
+	c := &mergeChange{chg0: 1, chg1: 1, chg2: 1}
+	if err := m.refine(c); err != nil {
+		t.Fatal(err)
+	}
+	output := mergeOutput{ctx: t.Context()}
+	result, err := m.output(c, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Conflicts != 0 || string(result.Content) != "same\n" {
+		t.Fatalf("refined identical region: %+v", result)
+	}
+}
+
+func TestMergeIncompleteLineEndings(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want int
+	}{
+		{"first\r\nlast", 1},
+		{"first\nlast", 0},
+		{"last", -1},
+	} {
+		classes := make(map[string]int)
+		f, err := readFile(t.Context(), []byte(tc.text), 0, &classes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := mergeEOLCRLF(&f, len(f.recs)-1); got != tc.want {
+			t.Fatalf("line ending for %q = %d, want %d", tc.text, got, tc.want)
+		}
+	}
+}
+
 func ExampleMerge() {
 	result, err := Merge(context.Background(), []byte("base\n"),
 		[]byte("same\nours\nend\n"), []byte("same\ntheirs\nend\n"), nil)

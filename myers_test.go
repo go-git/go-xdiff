@@ -119,13 +119,13 @@ func TestMyersMinimalShortSequences(t *testing.T) {
 }
 
 func TestMyersCancellationAndInvalidState(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	e := environment{ctx: ctx}
 	if err := e.myers(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled Myers: %v", err)
 	}
-	e.ctx = context.Background()
+	e.ctx = t.Context()
 	e.a, e.b = myersTestFile([]int{1}), myersTestFile(nil)
 	e.a.refs[0] = 1
 	if err := e.myers(); err == nil {
@@ -135,5 +135,24 @@ func TestMyersCancellationAndInvalidState(t *testing.T) {
 	e.a.changed[0] = true
 	if err := e.compact(); err == nil {
 		t.Fatal("compaction accepted a changed sentinel")
+	}
+	for _, invalid := range []file{
+		{recs: []record{{id: 0}}, changed: make([]bool, 2)},
+		{changed: []bool{false, true}},
+	} {
+		for _, other := range []bool{false, true} {
+			e.a, e.b = myersTestFile(nil), myersTestFile(nil)
+			if other {
+				e.b = invalid
+			} else {
+				e.a = invalid
+			}
+			if err := e.myers(); err == nil {
+				t.Fatal("Myers accepted an invalid change array")
+			}
+			if err := e.compact(); err == nil {
+				t.Fatal("compaction accepted an invalid change array")
+			}
+		}
 	}
 }

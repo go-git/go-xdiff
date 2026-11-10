@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -152,6 +153,37 @@ func TestHistogramChainLimit(t *testing.T) {
 	_, err := Diff(context.Background(), a, b, &Options{Algorithm: Histogram})
 	if err == nil {
 		t.Fatal("accepted a hash chain with 65 distinct records")
+	}
+}
+
+func TestMyersHeuristicsReference(t *testing.T) {
+	ref := oracle(t)
+	records := func(prefix string, count int) []byte {
+		var data []byte
+		for i := range count {
+			data = fmt.Appendf(data, "%s%d\n", prefix, i)
+		}
+		return data
+	}
+	left, right := records("left", 16500), records("right", 16500)
+	middle, moved := records("middle", 300), records("moved", 300)
+	old := bytes.Join([][]byte{left, middle, right, moved}, nil)
+	new := bytes.Join([][]byte{moved, left, right, middle}, nil)
+	reverse := func(data []byte) []byte {
+		lines := bytes.SplitAfter(data, []byte{'\n'})
+		slices.Reverse(lines)
+		return bytes.Join(lines, nil)
+	}
+	for _, pair := range [][2][]byte{{old, new}, {new, old}, {reverse(old), reverse(new)}, {reverse(new), reverse(old)}} {
+		for _, minimal := range []bool{false, true} {
+			compareScript(t, ref, pair[0], pair[1], Options{Minimal: minimal})
+		}
+	}
+	for _, pair := range [][2][]byte{
+		{[]byte("a\nb\n"), append([]byte("b\n"), bytes.Repeat([]byte("a\n"), 1024)...)},
+		{append([]byte("b\n"), bytes.Repeat([]byte("a\n"), 1024)...), []byte("a\nb\n")},
+	} {
+		compareScript(t, ref, pair[0], pair[1], Options{})
 	}
 }
 

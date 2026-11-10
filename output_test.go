@@ -56,6 +56,8 @@ func TestOutputReference(t *testing.T) {
 		{"\n\nx\n\n\nz\n", "\nx\n\nz\n"},
 		{"x\n \ny\n", "x\n\t\ny\n"},
 		{"a\nb\n", " a \nB\n"},
+		{"x\n1\n2\n3\n4\n\nx\n\n", "X\n1\n2\n3\n4\nx\n"},
+		{"\nfirst\n body\n}\n\nsecond\n old\n}\n", "first\n body\n}\n\nsecond\n new\n}\n"},
 		{"éheader\n body\n", "éheader\n new\n"},
 		{"$name \v\f\n body\n", "$name \v\f\n new\n"},
 		{strings.Repeat("X", 85) + " \n old\n", strings.Repeat("X", 85) + " \n new\n"},
@@ -328,6 +330,33 @@ func TestOutputLoopCancellation(t *testing.T) {
 		if _, err := r.Hunks(ctx, &EmitOptions{FunctionNames: true, FunctionContext: true}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancellation at %d: %v", remaining, err)
 		}
+	}
+}
+
+func TestOutputIgnoredChangeGroups(t *testing.T) {
+	for _, tc := range []struct {
+		name, old, new string
+		emit           EmitOptions
+		want           Change
+	}{
+		{"nearby ignored groups", "x\n1\n2\n3\n4\n\nx\n\n", "X\n1\n2\n3\n4\nx\n",
+			EmitOptions{Context: 3}, Change{0, 4, 0, 4}},
+		{"function after ignored group", "\nfirst\n body\n}\n\nsecond\n old\n}\n",
+			"first\n body\n}\n\nsecond\n new\n}\n", EmitOptions{FunctionContext: true}, Change{5, 3, 4, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Diff(t.Context(), []byte(tc.old), []byte(tc.new), &Options{IgnoreBlankLines: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			hunks, err := r.Hunks(t.Context(), &tc.emit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(hunks) != 1 || hunks[0].Change != tc.want {
+				t.Fatalf("hunks = %+v, want one hunk %+v", hunks, tc.want)
+			}
+		})
 	}
 }
 
