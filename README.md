@@ -61,6 +61,16 @@ Nil options select zealous refinement.
 An explicit zero-valued `MergeOptions` selects minimal refinement.
 Use options to select diff3 or zdiff3 markers, labels, or automatic conflict resolution.
 
+## Examples
+
+Run these examples from the repository root:
+
+```sh
+go run ./examples/diff       # Unified diff output.
+go run ./examples/algorithms # Algorithm selection and zero-based line ranges.
+go run ./examples/merge      # Clean merges and diff3 conflict markers.
+```
+
 ## Behavior
 
 Inputs are `[]byte`. Lines end at LF bytes.
@@ -74,7 +84,7 @@ Blank-line and regex filters affect hunks and output, not changes or chunks.
 Ignore expressions use Go's `regexp` rules; use `(?m)` for line anchors.
 
 See the [API documentation](https://pkg.go.dev/github.com/go-git/go-xdiff),
-[examples](example_test.go), and [benchmarks](benchmarks/README.md).
+[API examples](example_test.go), and [benchmarks](benchmarks/README.md).
 
 ## Development
 
