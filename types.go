@@ -66,7 +66,7 @@ type Chunk struct {
 	Old, New  []byte
 }
 
-// EmitOptions controls hunk construction and emission. Zero values request no context.
+// EmitOptions controls hunk construction and formatting. Zero values request no context.
 type EmitOptions struct {
 	Context, InterHunkContext int
 	NoHunkHeader              bool
@@ -75,24 +75,24 @@ type EmitOptions struct {
 	// FindFunc identifies a function header and its display name.
 	// A nil callback uses xdiff's default ASCII header detection.
 	FindFunc func(line []byte) (name string, ok bool)
-	// HunkFunc selects range-only output for Emit and WriteUnified.
-	// Ranges exclude outer context but include unchanged gaps within a group.
-	// Context and InterHunkContext control grouping.
-	// Emit skips function options and EmitCallbacks in this mode.
-	// An error stops emission.
-	HunkFunc func(Change) error
 }
 
-// EmitCallbacks receives unified output without file headers.
+// EmitCallbacks receives unified output without file headers or grouped ranges.
 // Callbacks return an error to stop emission.
 type EmitCallbacks struct {
+	// HunkFunc selects range-only output for Emit.
+	// Ranges exclude outer context but include unchanged gaps within a group.
+	// EmitOptions.Context and InterHunkContext control grouping.
+	// Emit skips function options and text callbacks in this mode.
+	// An error stops emission.
+	HunkFunc func(Change) error
 	// HunkHeaderFunc replaces the standard hunk header.
 	// When nil, LineFunc receives the formatted header as one part.
-	// NoHunkHeader suppresses both header paths.
+	// EmitOptions.NoHunkHeader suppresses both header paths.
 	HunkHeaderFunc func(Hunk) error
 	// LineFunc receives a record's prefix, original content, and optional
 	// missing-newline notice as separate parts. It also receives default headers.
-	// LineFunc is required unless EmitOptions.HunkFunc is set.
+	// Emit requires LineFunc unless HunkFunc is set.
 	// The parts and their bytes are borrowed:
 	// do not modify them or retain them after the callback returns.
 	LineFunc func(parts ...[]byte) error

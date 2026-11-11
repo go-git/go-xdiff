@@ -125,15 +125,14 @@ func ExampleResult_Emit_ranges() {
 	if err != nil {
 		panic(err)
 	}
-	err = result.Emit(context.Background(), &xdiff.EmitOptions{
-		Context: 1,
+	err = result.Emit(context.Background(), &xdiff.EmitOptions{Context: 1}, &xdiff.EmitCallbacks{
 		HunkFunc: func(change xdiff.Change) error {
 			_, err := fmt.Printf("old=[%d,%d) new=[%d,%d)\n",
 				change.OldStart, change.OldStart+change.OldLines,
 				change.NewStart, change.NewStart+change.NewLines)
 			return err
 		},
-	}, nil)
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -147,12 +146,12 @@ func ExampleResult_Emit_stop() {
 	}
 	stop := errors.New("stop")
 	calls := 0
-	err = result.Emit(context.Background(), &xdiff.EmitOptions{
+	err = result.Emit(context.Background(), nil, &xdiff.EmitCallbacks{
 		HunkFunc: func(xdiff.Change) error {
 			calls++
 			return stop
 		},
-	}, nil)
+	})
 	fmt.Println("calls:", calls)
 	fmt.Println("stopped:", errors.Is(err, stop))
 	// Output:

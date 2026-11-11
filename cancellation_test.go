@@ -101,10 +101,9 @@ func TestHunkCancellationAtEveryCheck(t *testing.T) {
 						return r.Emit(ctx, &emit, &callbacks)
 					})
 				}
-				rangeOpts := emit
-				rangeOpts.HunkFunc = func(Change) error { return nil }
+				rangeCallbacks := EmitCallbacks{HunkFunc: func(Change) error { return nil }}
 				checkCancellation(t, func(ctx context.Context) error {
-					return r.Emit(ctx, &rangeOpts, nil)
+					return r.Emit(ctx, &emit, &rangeCallbacks)
 				})
 				checkCancellation(t, func(ctx context.Context) error {
 					ranges, err := r.HunkRanges(ctx, &emit)

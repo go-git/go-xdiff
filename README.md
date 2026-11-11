@@ -47,22 +47,23 @@ The result provides:
 
 Use the package-level `WriteUnified()` helper for output to an `io.Writer`.
 For custom output, pass `EmitCallbacks` to `Emit()`.
+`EmitOptions` controls grouping and formatting. `EmitCallbacks` controls the output destination.
 `LineFunc` receives separate prefix, content, and optional missing-newline notice parts.
 It receives each standard hunk header as one part.
 The parts and their bytes are borrowed. Do not modify or retain them.
 
 An optional `HunkHeaderFunc` replaces the standard header and receives a `Hunk` with zero-based ranges.
 `NoHunkHeader` suppresses both header paths.
-`LineFunc` is required, even when there are no changes, unless `EmitOptions.HunkFunc` is set.
+`LineFunc` is required, even when there are no changes, unless `EmitCallbacks.HunkFunc` is set.
 Callbacks return errors to stop emission. `Emit()` checks cancellation before and after each callback.
 The caller controls colors and terminal detection.
 
-Set `EmitOptions.HunkFunc` for range-only output without header or line callbacks.
+Set `EmitCallbacks.HunkFunc` for range-only output without header or line callbacks.
 Context settings control grouping, but returned ranges exclude outer context and function expansion.
-`Hunks()` ignores `HunkFunc` and still returns complete hunks.
+`Hunks()` returns complete hunks without output callbacks.
 
 Use `HunkRanges()` to collect the same ranges into a slice.
-It reuses `EmitOptions` but does not call `HunkFunc` or `FindFunc`.
+It reuses `EmitOptions` but does not call `FindFunc`.
 
 ```go
 ranges, err := result.HunkRanges(ctx, &xdiff.EmitOptions{Context: 3})

@@ -162,10 +162,11 @@ func BenchmarkOutput(b *testing.B) {
 				}
 			})
 			b.Run("Ranges", func(b *testing.B) {
-				opts := EmitOptions{Context: 3, HunkFunc: func(Change) error { return nil }}
+				opts := EmitOptions{Context: 3}
+				callbacks := EmitCallbacks{HunkFunc: func(Change) error { return nil }}
 				b.ReportAllocs()
 				for b.Loop() {
-					if err := result.Emit(b.Context(), &opts, nil); err != nil {
+					if err := result.Emit(b.Context(), &opts, &callbacks); err != nil {
 						b.Fatal(err)
 					}
 				}

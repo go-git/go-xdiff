@@ -45,14 +45,14 @@ func compareOutput(t *testing.T, ref *testref.Oracle, a, b []byte, opts Options,
 			a, b, opts, emit, got.Bytes(), want)
 	}
 	var ranges []testref.Change
-	emit.HunkFunc = func(change Change) error {
+	callbacks := EmitCallbacks{HunkFunc: func(change Change) error {
 		ranges = append(ranges, testref.Change{
 			OldStart: change.OldStart, OldCount: change.OldLines,
 			NewStart: change.NewStart, NewCount: change.NewLines,
 		})
 		return nil
-	}
-	if err := r.Emit(t.Context(), &emit, nil); err != nil {
+	}}
+	if err := r.Emit(t.Context(), &emit, &callbacks); err != nil {
 		t.Fatal(err)
 	}
 	collected, err := r.HunkRanges(t.Context(), &emit)
@@ -185,10 +185,6 @@ func TestHunks(t *testing.T) {
 		t.Fatal("hunk lines do not refer to inputs")
 	}
 	opts.NoHunkHeader = true
-	opts.HunkFunc = func(Change) error {
-		t.Fatal("Hunks called HunkFunc")
-		return nil
-	}
 	without, err := r.Hunks(context.Background(), &opts)
 	if err != nil || !reflect.DeepEqual(hunks, without) {
 		t.Fatalf("emission options change hunks: %v", err)
@@ -209,12 +205,8 @@ func TestHunkRanges(t *testing.T) {
 		{"separate", nil, []Change{{1, 1, 1, 1}, {3, 1, 3, 1}}},
 		{"context", &EmitOptions{Context: 1}, []Change{{1, 3, 1, 3}}},
 		{"interhunk", &EmitOptions{InterHunkContext: 1}, []Change{{1, 3, 1, 3}}},
-		{"emission callbacks do not run", &EmitOptions{
+		{"function options do not apply", &EmitOptions{
 			Context: 1, NoHunkHeader: true, FunctionNames: true, FunctionContext: true,
-			HunkFunc: func(Change) error {
-				t.Fatal("HunkRanges called HunkFunc")
-				return nil
-			},
 			FindFunc: func([]byte) (string, bool) {
 				t.Fatal("HunkRanges called FindFunc")
 				return "", false
@@ -528,12 +520,12 @@ func TestEmitHunkFunc(t *testing.T) {
 			t.Fatal("range emission called FindFunc")
 			return "", false
 		},
+	}
+	callbacks := EmitCallbacks{
 		HunkFunc: func(change Change) error {
 			ranges = append(ranges, change)
 			return nil
 		},
-	}
-	callbacks := EmitCallbacks{
 		HunkHeaderFunc: func(Hunk) error {
 			t.Fatal("range emission called HunkHeaderFunc")
 			return nil
@@ -545,22 +537,19 @@ func TestEmitHunkFunc(t *testing.T) {
 	}
 	for _, noHeader := range []bool{false, true} {
 		opts.NoHunkHeader = noHeader
-		for _, cb := range []*EmitCallbacks{nil, {}, &callbacks} {
+		for _, withText := range []bool{false, true} {
+			emit := callbacks
+			if !withText {
+				emit.HunkHeaderFunc, emit.LineFunc = nil, nil
+			}
 			ranges = nil
-			if err := r.Emit(t.Context(), &opts, cb); err != nil {
+			if err := r.Emit(t.Context(), &opts, &emit); err != nil {
 				t.Fatal(err)
 			}
 			if want := []Change{{1, 3, 1, 3}}; !reflect.DeepEqual(ranges, want) {
 				t.Fatalf("ranges = %+v, want %+v", ranges, want)
 			}
 		}
-	}
-	var output bytes.Buffer
-	if err := WriteUnified(t.Context(), &output, r, &opts); err != nil {
-		t.Fatal(err)
-	}
-	if output.Len() != 0 || len(ranges) != 2 {
-		t.Fatalf("range-only writer: output %q, ranges %+v", output.Bytes(), ranges)
 	}
 }
 
@@ -572,11 +561,11 @@ func TestEmitHunkFuncEmpty(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		opts := EmitOptions{HunkFunc: func(Change) error {
+		callbacks := EmitCallbacks{HunkFunc: func(Change) error {
 			t.Fatal("range callback received an unchanged or ignored range")
 			return nil
 		}}
-		if err := r.Emit(t.Context(), &opts, nil); err != nil {
+		if err := r.Emit(t.Context(), nil, &callbacks); err != nil {
 			t.Fatal(err)
 		}
 		if ranges, err := r.HunkRanges(t.Context(), nil); err != nil || ranges != nil {
@@ -597,7 +586,7 @@ func TestEmitHunkFuncStops(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				calls := 0
-				opts := EmitOptions{HunkFunc: func(Change) error {
+				callbacks := EmitCallbacks{HunkFunc: func(Change) error {
 					calls++
 					if calls == stopAt {
 						if cancelCallback {
@@ -608,7 +597,7 @@ func TestEmitHunkFuncStops(t *testing.T) {
 					}
 					return nil
 				}}
-				err := r.Emit(ctx, &opts, nil)
+				err := r.Emit(ctx, nil, &callbacks)
 				want := failure
 				if cancelCallback {
 					want = context.Canceled
@@ -628,16 +617,16 @@ func TestEmitHunkFuncAllocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := EmitOptions{HunkFunc: func(Change) error { return nil }}
+	callbacks := EmitCallbacks{HunkFunc: func(Change) error { return nil }}
 	allocs := testing.AllocsPerRun(10, func() {
-		if err := r.Emit(ctx, &opts, nil); err != nil {
+		if err := r.Emit(ctx, nil, &callbacks); err != nil {
 			t.Fatal(err)
 		}
 	})
 	if allocs > 1 {
 		t.Fatalf("range emission: %.0f allocations, want at most 1", allocs)
 	}
-	opts.Context = 1
+	opts := EmitOptions{Context: 1}
 	allocs = testing.AllocsPerRun(10, func() {
 		if _, err := r.HunkRanges(ctx, &opts); err != nil {
 			t.Fatal(err)

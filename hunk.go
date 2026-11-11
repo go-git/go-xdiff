@@ -191,7 +191,7 @@ func (b *hunkBuilder) empty(i int) bool {
 // HunkRanges returns filtered, grouped changes without outer context.
 // Ranges can include unchanged lines between changes.
 // Only Context and InterHunkContext affect range construction.
-// HunkRanges does not call HunkFunc or FindFunc.
+// HunkRanges does not call FindFunc.
 func (r *Result) HunkRanges(ctx context.Context, options *EmitOptions) ([]Change, error) {
 	opts, err := emitOptions(ctx, options)
 	if err != nil {
@@ -209,7 +209,7 @@ func (r *Result) HunkRanges(ctx context.Context, options *EmitOptions) ([]Change
 }
 
 // Hunks returns unified hunks whose line contents refer to the original inputs.
-// NoHunkHeader and HunkFunc affect Emit and WriteUnified only.
+// NoHunkHeader affects Emit and WriteUnified only.
 func (r *Result) Hunks(ctx context.Context, options *EmitOptions) ([]Hunk, error) {
 	opts, err := emitOptions(ctx, options)
 	if err != nil {

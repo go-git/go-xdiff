@@ -39,7 +39,7 @@ func hunkHeader(header []byte, h Hunk) []byte {
 }
 
 // Emit sends unified output without file headers to callbacks.
-// When options.HunkFunc is set, it reports grouped ranges instead.
+// When callbacks.HunkFunc is set, it reports grouped ranges instead.
 // Otherwise, it requires LineFunc even when the result has no changes.
 // It checks cancellation before and after each callback.
 func (r *Result) Emit(ctx context.Context, options *EmitOptions, callbacks *EmitCallbacks) error {
@@ -47,8 +47,8 @@ func (r *Result) Emit(ctx context.Context, options *EmitOptions, callbacks *Emit
 	if err != nil {
 		return err
 	}
-	if opts.HunkFunc != nil {
-		return r.eachHunkRange(ctx, opts, opts.HunkFunc)
+	if callbacks != nil && callbacks.HunkFunc != nil {
+		return r.eachHunkRange(ctx, opts, callbacks.HunkFunc)
 	}
 	if callbacks == nil || callbacks.LineFunc == nil {
 		return errors.New("xdiff: nil line callback")
@@ -116,7 +116,6 @@ func (r *Result) Emit(ctx context.Context, options *EmitOptions, callbacks *Emit
 }
 
 // WriteUnified writes unified hunks without file headers through result.Emit.
-// When options.HunkFunc is set, it calls that function without writing hunks.
 // It returns writer errors and reports incomplete writes as io.ErrShortWrite.
 func WriteUnified(ctx context.Context, w io.Writer, result *Result, options *EmitOptions) error {
 	if w == nil {
