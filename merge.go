@@ -7,6 +7,7 @@
 package xdiff
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -52,6 +53,7 @@ type merger struct {
 	ctx          context.Context
 	ours, theirs *Result
 	opts         MergeOptions
+	keys         [2][]byte
 }
 
 // Merge computes a three-way merge without changing its inputs or options.
@@ -90,6 +92,15 @@ func Merge(ctx context.Context, base, ours, theirs []byte, options *MergeOptions
 	if opts.Style != ConflictMerge && opts.Level > MergeEager {
 		opts.Level = MergeEager
 	}
+	// Preserve histogram's data-dependent chain-limit errors.
+	if opts.Diff.Algorithm != Histogram {
+		if bytes.Equal(base, ours) {
+			return copyMerge(ctx, theirs)
+		}
+		if bytes.Equal(base, theirs) {
+			return copyMerge(ctx, ours)
+		}
+	}
 	// Diff retains the raw script even when output suppression is enabled.
 	left, err := Diff(ctx, base, ours, &opts.Diff)
 	if err != nil {
@@ -99,19 +110,12 @@ func Merge(ctx context.Context, base, ours, theirs []byte, options *MergeOptions
 	if err != nil {
 		return nil, err
 	}
-	output := mergeOutput{ctx: ctx}
 	if len(left.changes) == 0 || len(right.changes) == 0 {
 		data := ours
 		if len(left.changes) == 0 {
 			data = theirs
 		}
-		if len(data) > 0 {
-			output.data = make([]byte, 0, len(data))
-		}
-		if err := output.copy(data); err != nil {
-			return nil, err
-		}
-		return &MergeResult{Content: output.data}, nil
+		return copyMerge(ctx, data)
 	}
 	m := merger{ctx: ctx, ours: left, theirs: right, opts: opts}
 	changes, err := m.changes()
@@ -129,16 +133,36 @@ func Merge(ctx context.Context, base, ours, theirs []byte, options *MergeOptions
 	if err != nil {
 		return nil, err
 	}
+	output := mergeOutput{ctx: ctx}
 	return m.output(changes, &output)
 }
 
+func copyMerge(ctx context.Context, data []byte) (*MergeResult, error) {
+	output := mergeOutput{ctx: ctx}
+	if len(data) > 0 {
+		output.data = make([]byte, 0, len(data))
+	}
+	if err := output.copy(data); err != nil {
+		return nil, err
+	}
+	return &MergeResult{Content: output.data}, nil
+}
+
 func (m *merger) equalLines(i1, i2, count int) (bool, error) {
+	mode := m.opts.Diff.Whitespace
 	for i := 0; i < count; i++ {
 		if err := m.ctx.Err(); err != nil {
 			return false, err
 		}
-		if comparisonKey(m.ours.b.region(i1+i, 1), m.opts.Diff.Whitespace) !=
-			comparisonKey(m.theirs.b.region(i2+i, 1), m.opts.Diff.Whitespace) {
+		a, b := m.ours.b.region(i1+i, 1), m.theirs.b.region(i2+i, 1)
+		if mode&(IgnoreAllSpace|IgnoreSpaceChange) != 0 {
+			m.keys[0] = comparisonBytes(m.keys[0][:0], a, mode)
+			m.keys[1] = comparisonBytes(m.keys[1][:0], b, mode)
+			a, b = m.keys[0], m.keys[1]
+		} else {
+			a, b = comparisonBytes(nil, a, mode), comparisonBytes(nil, b, mode)
+		}
+		if !bytes.Equal(a, b) {
 			return false, nil
 		}
 	}

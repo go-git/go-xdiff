@@ -92,8 +92,8 @@ func TestMergeReference(t *testing.T) {
 		opts := MergeOptions{Level: MergeLevel(i % 4), Style: ConflictStyle(i % 3),
 			Favor: MergeFavor((i / 3) % 4), MarkerSize: i % 9,
 			Diff: Options{Algorithm: Algorithm(i % 3), IndentHeuristic: i%2 == 0}}
-		if i%4 == 0 {
-			opts.Diff.Whitespace = Whitespace(1 << uint(i%4))
+		if i%5 != 0 {
+			opts.Diff.Whitespace = Whitespace(1 << uint((i/5)%4))
 		}
 		if i%3 == 0 {
 			opts.AncestorLabel, opts.OursLabel, opts.TheirsLabel = "original", "left", "right"

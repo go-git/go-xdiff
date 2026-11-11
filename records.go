@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"hash/maphash"
+	"math/bits"
 	"slices"
 )
 
@@ -59,10 +60,6 @@ func (f *file) region(start, count int) []byte {
 // Git's sane-ctype table deliberately excludes form feed and vertical tab.
 func isSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
-}
-
-func comparisonKey(line []byte, mode Whitespace) string {
-	return string(comparisonBytes(nil, line, mode))
 }
 
 func comparisonBytes(key, line []byte, mode Whitespace) []byte {
@@ -227,10 +224,5 @@ func readFile(ctx context.Context, data []byte, mode Whitespace, classes *classi
 }
 
 func bogosqrt(n int) int {
-	result := 1
-	for n > 0 {
-		result <<= 1
-		n >>= 2
-	}
-	return result
+	return 1 << ((bits.Len(uint(n)) + 1) / 2)
 }

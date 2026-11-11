@@ -25,8 +25,9 @@ func appendRange(buf []byte, start, count int) []byte {
 	return buf
 }
 
-func hunkHeader(h Hunk) []byte {
-	header := appendRange([]byte("@@ -"), h.OldStart, h.OldLines)
+func hunkHeader(header []byte, h Hunk) []byte {
+	header = append(header, "@@ -"...)
+	header = appendRange(header, h.OldStart, h.OldLines)
 	header = append(header, " +"...)
 	header = appendRange(header, h.NewStart, h.NewLines)
 	header = append(header, " @@"...)
@@ -51,6 +52,7 @@ func (r *Result) Emit(ctx context.Context, options *EmitOptions, callbacks *Emit
 	headerFunc, lineFunc := callbacks.HunkHeaderFunc, callbacks.LineFunc
 	var parts [3][]byte
 	var prefix [1]byte
+	var header []byte
 	var marker []byte
 	return r.eachHunk(ctx, opts, func(h Hunk) error {
 		if !opts.NoHunkHeader {
@@ -61,7 +63,11 @@ func (r *Result) Emit(ctx context.Context, options *EmitOptions, callbacks *Emit
 			if headerFunc != nil {
 				err = headerFunc(h)
 			} else {
-				parts[0] = hunkHeader(h)
+				if header == nil {
+					header = make([]byte, 0, 128)
+				}
+				header = hunkHeader(header[:0], h)
+				parts[0] = header
 				err = lineFunc(parts[:1]...)
 			}
 			if err != nil {

@@ -128,3 +128,103 @@ func BenchmarkChunks(b *testing.B) {
 		result.Chunks()
 	}
 }
+
+func BenchmarkOutput(b *testing.B) {
+	old, new, _ := benchmarkInputs()
+	for _, pair := range []struct {
+		name     string
+		old, new []byte
+	}{
+		{"Sparse", old, new},
+		{"LargeHunk", bytes.Repeat([]byte("old\n"), 2000), bytes.Repeat([]byte("new\n"), 2000)},
+		{"Unchanged", old, bytes.Clone(old)},
+	} {
+		b.Run(pair.name, func(b *testing.B) {
+			result, err := Diff(b.Context(), pair.old, pair.new, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Run("Hunks", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					if _, err := result.Hunks(b.Context(), &EmitOptions{Context: 3}); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			for _, spec := range []struct {
+				name     string
+				noHeader bool
+				header   func(Hunk) error
+			}{
+				{"Emit", false, nil},
+				{"NoHeader", true, nil},
+				{"CustomHeader", false, func(Hunk) error { return nil }},
+			} {
+				b.Run(spec.name, func(b *testing.B) {
+					opts := EmitOptions{Context: 3, NoHunkHeader: spec.noHeader}
+					callbacks := EmitCallbacks{
+						HunkHeaderFunc: spec.header,
+						LineFunc:       func(...[]byte) error { return nil },
+					}
+					b.ReportAllocs()
+					for b.Loop() {
+						if err := result.Emit(b.Context(), &opts, &callbacks); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkMergeSpecialInputs(b *testing.B) {
+	base, ours, theirs := benchmarkInputs()
+	for _, pair := range []struct {
+		name         string
+		ours, theirs []byte
+	}{
+		{"Unchanged", bytes.Clone(base), bytes.Clone(base)},
+		{"OursUnchanged", bytes.Clone(base), theirs},
+		{"TheirsUnchanged", ours, bytes.Clone(base)},
+		{"SameEdits", ours, bytes.Clone(ours)},
+	} {
+		b.Run(pair.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(base) + len(pair.ours) + len(pair.theirs)))
+			for b.Loop() {
+				if _, err := Merge(b.Context(), base, pair.ours, pair.theirs, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkMergeWhitespace(b *testing.B) {
+	base := bytes.Repeat([]byte("original\n"), 2000)
+	ours := bytes.Repeat([]byte("one two\n"), 2000)
+	for _, spec := range []struct {
+		name string
+		mode Whitespace
+		line string
+	}{
+		{"All", IgnoreAllSpace, "o ne  t w o\n"},
+		{"Change", IgnoreSpaceChange, "one  two\n"},
+		{"EOL", IgnoreSpaceAtEOL, "one two \t\n"},
+		{"CR", IgnoreCRAtEOL, "one two\r\n"},
+	} {
+		b.Run(spec.name, func(b *testing.B) {
+			theirs := bytes.Repeat([]byte(spec.line), 2000)
+			opts := MergeOptions{Level: MergeEager, Diff: Options{Whitespace: spec.mode}}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(base) + len(ours) + len(theirs)))
+			for b.Loop() {
+				if _, err := Merge(b.Context(), base, ours, theirs, &opts); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

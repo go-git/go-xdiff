@@ -52,7 +52,7 @@ func (r *Result) emitChanges(ctx context.Context) ([]emitChange, error) {
 			if pass == 1 {
 				start, count = change.NewStart, change.NewLines
 			}
-			for j := start; j < start+count; j++ {
+			for j := start; j < start+count && (allBlank || allMatch); j++ {
 				line := f.region(j, 1)
 				if err := ctx.Err(); err != nil {
 					return nil, err
@@ -296,7 +296,15 @@ func (r *Result) eachHunk(ctx context.Context, opts EmitOptions, emit func(Hunk)
 			b.findFunction(s1-1, previousFunction, &function)
 			previousFunction = s1 - 1
 		}
-		h := Hunk{Change: Change{s1, e1 - s1, s2, e2 - s2}, Function: function}
+		lineCount := e2 - s2
+		for i := start; i <= last; i++ {
+			if !b.check() {
+				return b.err
+			}
+			lineCount += changes[i].OldLines
+		}
+		h := Hunk{Change: Change{s1, e1 - s1, s2, e2 - s2}, Function: function,
+			Lines: make([]Line, 0, lineCount)}
 		add := func(f *file, from, to int, op Operation) {
 			for i := from; i < to && b.check(); i++ {
 				h.Lines = append(h.Lines, Line{op, f.region(i, 1)})

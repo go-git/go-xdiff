@@ -5,7 +5,11 @@
 
 package xdiff
 
-import "fmt"
+import (
+	"cmp"
+	"fmt"
+	"slices"
+)
 
 const (
 	maxIndent        = 200
@@ -116,13 +120,7 @@ func (s *splitScore) add(m splitMeasurement) {
 }
 
 func (s splitScore) compare(other splitScore) int {
-	cmp := 0
-	if s.effectiveIndent > other.effectiveIndent {
-		cmp = 1
-	} else if s.effectiveIndent < other.effectiveIndent {
-		cmp = -1
-	}
-	return 60*cmp + s.penalty - other.penalty
+	return 60*cmp.Compare(s.effectiveIndent, other.effectiveIndent) + s.penalty - other.penalty
 }
 
 type changeGroup struct {
@@ -322,8 +320,6 @@ func (e *environment) script() []Change {
 			changes = append(changes, Change{OldStart: i1, OldLines: l1 - i1, NewStart: i2, NewLines: l2 - i2})
 		}
 	}
-	for i, j := 0, len(changes)-1; i < j; i, j = i+1, j-1 {
-		changes[i], changes[j] = changes[j], changes[i]
-	}
+	slices.Reverse(changes)
 	return changes
 }

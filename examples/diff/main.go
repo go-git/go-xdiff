@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"log"
 	"os"
@@ -17,7 +18,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := xdiff.WriteUnified(ctx, os.Stdout, result, &xdiff.EmitOptions{Context: 1}); err != nil {
+	output := bufio.NewWriter(os.Stdout)
+	if err := xdiff.WriteUnified(ctx, output, result, &xdiff.EmitOptions{Context: 1}); err != nil {
+		log.Fatal(err)
+	}
+	if err := output.Flush(); err != nil {
 		log.Fatal(err)
 	}
 }

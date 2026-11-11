@@ -213,6 +213,82 @@ func TestMergeOptionsAndInputsUnchanged(t *testing.T) {
 	}
 }
 
+func TestMergeUnchangedAllocations(t *testing.T) {
+	base := bytes.Repeat([]byte("base\n"), 128)
+	changed := bytes.Repeat([]byte("changed\n"), 128)
+	for _, algorithm := range []Algorithm{Myers, Patience} {
+		for _, pair := range []struct {
+			name               string
+			ours, theirs, want []byte
+		}{
+			{"both", bytes.Clone(base), bytes.Clone(base), base},
+			{"ours", bytes.Clone(base), changed, changed},
+			{"theirs", changed, bytes.Clone(base), changed},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", algorithm, pair.name), func(t *testing.T) {
+				ctx := t.Context()
+				opts := MergeOptions{Diff: Options{Algorithm: algorithm}}
+				var result *MergeResult
+				allocs := testing.AllocsPerRun(10, func() {
+					var err error
+					result, err = Merge(ctx, base, pair.ours, pair.theirs, &opts)
+					if err != nil {
+						t.Fatal(err)
+					}
+				})
+				if allocs > 2 {
+					t.Fatalf("unchanged-side merge: %.0f allocations, want at most 2", allocs)
+				}
+				if result.Conflicts != 0 || !bytes.Equal(result.Content, pair.want) {
+					t.Fatalf("unchanged-side merge: %+v", result)
+				}
+			})
+		}
+	}
+}
+
+func TestMergeWhitespaceAllocationScaling(t *testing.T) {
+	for _, mode := range []Whitespace{IgnoreAllSpace, IgnoreSpaceChange} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			ctx := t.Context()
+			opts := MergeOptions{Level: MergeEager, Diff: Options{Whitespace: mode}}
+			measure := func(lines int) float64 {
+				base := bytes.Repeat([]byte("original\n"), lines)
+				ours := bytes.Repeat([]byte("one two\n"), lines)
+				theirs := bytes.Repeat([]byte("one  two\n"), lines)
+				var result *MergeResult
+				allocs := testing.AllocsPerRun(10, func() {
+					var err error
+					result, err = Merge(ctx, base, ours, theirs, &opts)
+					if err != nil {
+						t.Fatal(err)
+					}
+				})
+				if result.Conflicts != 0 || !bytes.Equal(result.Content, ours) {
+					t.Fatalf("normalized merge: %+v", result)
+				}
+				return allocs
+			}
+			small, large := measure(128), measure(1024)
+			if large > small+2 {
+				t.Fatalf("allocations scale with line count: %.0f -> %.0f", small, large)
+			}
+		})
+	}
+}
+
+func TestMergeHistogramUnchangedSide(t *testing.T) {
+	base, changed := histogramCollisionText(histogramMaxChain + 1)
+	for _, pair := range [][2][]byte{{bytes.Clone(base), changed}, {changed, bytes.Clone(base)}} {
+		result, err := Merge(t.Context(), base, pair[0], pair[1],
+			&MergeOptions{Diff: Options{Algorithm: Histogram}})
+		want := fmt.Sprintf("xdiff: histogram hash chain exceeds %d records", histogramMaxChain)
+		if err == nil || err.Error() != want || result != nil {
+			t.Fatalf("histogram merge: result=%+v, error=%v; want %q", result, err, want)
+		}
+	}
+}
+
 func TestMergeErrors(t *testing.T) {
 	for _, opts := range []MergeOptions{
 		{Level: 99}, {Favor: 99}, {Style: 99}, {MarkerSize: -1},

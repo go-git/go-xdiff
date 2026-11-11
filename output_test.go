@@ -326,6 +326,74 @@ func TestOutputErrors(t *testing.T) {
 	}
 }
 
+func TestEmitAllocations(t *testing.T) {
+	old, new, _ := benchmarkInputs()
+	for _, spec := range []struct {
+		name     string
+		new      []byte
+		noHeader bool
+		header   func(Hunk) error
+		overhead int
+	}{
+		{"default", new, false, nil, 4},
+		{"no header", new, true, nil, 3},
+		{"custom header", new, false, func(Hunk) error { return nil }, 3},
+		{"unchanged", bytes.Clone(old), false, nil, 2},
+	} {
+		t.Run(spec.name, func(t *testing.T) {
+			ctx := t.Context()
+			result, err := Diff(ctx, old, spec.new, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := EmitOptions{Context: 3, NoHunkHeader: spec.noHeader}
+			hunks, err := result.Hunks(ctx, &opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			callbacks := EmitCallbacks{
+				HunkHeaderFunc: spec.header,
+				LineFunc:       func(...[]byte) error { return nil },
+			}
+			allocs := testing.AllocsPerRun(10, func() {
+				if err := result.Emit(ctx, &opts, &callbacks); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if limit := len(hunks) + spec.overhead; allocs > float64(limit) {
+				t.Fatalf("emission: %.0f allocations, want at most %d", allocs, limit)
+			}
+		})
+	}
+}
+
+func TestEmitRetainedHunks(t *testing.T) {
+	result, err := Diff(t.Context(), []byte("old-one\nsame\nold-two\n"),
+		[]byte("new-one\nsame\nnew-two\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hunks []Hunk
+	err = result.Emit(t.Context(), nil, &EmitCallbacks{
+		HunkHeaderFunc: func(h Hunk) error {
+			hunks = append(hunks, h)
+			return nil
+		},
+		LineFunc: func(...[]byte) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hunks) != 2 || len(hunks[0].Lines) != 2 || len(hunks[1].Lines) != 2 {
+		t.Fatalf("retained hunks: %+v", hunks)
+	}
+	for i, want := range [][2]string{{"old-one\n", "new-one\n"}, {"old-two\n", "new-two\n"}} {
+		if string(hunks[i].Lines[0].Content) != want[0] || string(hunks[i].Lines[1].Content) != want[1] {
+			t.Fatalf("retained hunk %d changed: %+v", i, hunks[i])
+		}
+	}
+}
+
 func TestEmitCallbacks(t *testing.T) {
 	old, new := []byte("head\nold"), []byte("head\nnew")
 	r, err := Diff(t.Context(), old, new, nil)
