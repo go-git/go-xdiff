@@ -152,6 +152,24 @@ func BenchmarkOutput(b *testing.B) {
 					}
 				}
 			})
+			b.Run("HunkRanges", func(b *testing.B) {
+				opts := EmitOptions{Context: 3}
+				b.ReportAllocs()
+				for b.Loop() {
+					if _, err := result.HunkRanges(b.Context(), &opts); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("Ranges", func(b *testing.B) {
+				opts := EmitOptions{Context: 3, HunkFunc: func(Change) error { return nil }}
+				b.ReportAllocs()
+				for b.Loop() {
+					if err := result.Emit(b.Context(), &opts, nil); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
 			for _, spec := range []struct {
 				name     string
 				noHeader bool
@@ -160,6 +178,7 @@ func BenchmarkOutput(b *testing.B) {
 				{"Emit", false, nil},
 				{"NoHeader", true, nil},
 				{"CustomHeader", false, func(Hunk) error { return nil }},
+				{"SuppressedHeader", true, func(Hunk) error { return nil }},
 			} {
 				b.Run(spec.name, func(b *testing.B) {
 					opts := EmitOptions{Context: 3, NoHunkHeader: spec.noHeader}

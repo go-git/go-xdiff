@@ -31,10 +31,11 @@ func compareOutput(t *testing.T, ref *testref.Oracle, a, b []byte, opts Options,
 	if emit.FunctionContext {
 		flags |= 4
 	}
-	want := ref.Diff(t, a, b, testref.DiffOptions{
+	refOpts := testref.DiffOptions{
 		Flags: referenceFlags(opts), Context: emit.Context, Interhunk: emit.InterHunkContext,
 		EmitFlags: flags, Anchors: opts.Anchors, IgnorePatterns: patterns,
-	})
+	}
+	want := ref.Diff(t, a, b, refOpts)
 	var got bytes.Buffer
 	if err := WriteUnified(context.Background(), &got, r, &emit); err != nil {
 		t.Fatal(err)
@@ -42,6 +43,32 @@ func compareOutput(t *testing.T, ref *testref.Oracle, a, b []byte, opts Options,
 	if !bytes.Equal(got.Bytes(), want) {
 		t.Fatalf("output mismatch\nold %q\nnew %q\noptions %+v\nemit %+v\ngot %q\nwant %q",
 			a, b, opts, emit, got.Bytes(), want)
+	}
+	var ranges []testref.Change
+	emit.HunkFunc = func(change Change) error {
+		ranges = append(ranges, testref.Change{
+			OldStart: change.OldStart, OldCount: change.OldLines,
+			NewStart: change.NewStart, NewCount: change.NewLines,
+		})
+		return nil
+	}
+	if err := r.Emit(t.Context(), &emit, nil); err != nil {
+		t.Fatal(err)
+	}
+	collected, err := r.HunkRanges(t.Context(), &emit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamed []Change
+	for _, change := range ranges {
+		streamed = append(streamed, Change{change.OldStart, change.OldCount, change.NewStart, change.NewCount})
+	}
+	if !reflect.DeepEqual(collected, streamed) {
+		t.Fatalf("collected ranges %+v differ from streamed ranges %+v", collected, streamed)
+	}
+	if want := ref.HunkRanges(t, a, b, refOpts); !reflect.DeepEqual(ranges, want) {
+		t.Fatalf("range mismatch\nold %q\nnew %q\noptions %+v\nemit %+v\ngot %+v\nwant %+v",
+			a, b, opts, emit, ranges, want)
 	}
 }
 
@@ -158,9 +185,56 @@ func TestHunks(t *testing.T) {
 		t.Fatal("hunk lines do not refer to inputs")
 	}
 	opts.NoHunkHeader = true
+	opts.HunkFunc = func(Change) error {
+		t.Fatal("Hunks called HunkFunc")
+		return nil
+	}
 	without, err := r.Hunks(context.Background(), &opts)
 	if err != nil || !reflect.DeepEqual(hunks, without) {
-		t.Fatalf("NoHunkHeader changes hunks: %v", err)
+		t.Fatalf("emission options change hunks: %v", err)
+	}
+}
+
+func TestHunkRanges(t *testing.T) {
+	r, err := Diff(t.Context(), []byte("head\nold-one\nsame\nold-two\ntail\n"),
+		[]byte("head\nnew-one\nsame\nnew-two\ntail\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		opts *EmitOptions
+		want []Change
+	}{
+		{"separate", nil, []Change{{1, 1, 1, 1}, {3, 1, 3, 1}}},
+		{"context", &EmitOptions{Context: 1}, []Change{{1, 3, 1, 3}}},
+		{"interhunk", &EmitOptions{InterHunkContext: 1}, []Change{{1, 3, 1, 3}}},
+		{"emission callbacks do not run", &EmitOptions{
+			Context: 1, NoHunkHeader: true, FunctionNames: true, FunctionContext: true,
+			HunkFunc: func(Change) error {
+				t.Fatal("HunkRanges called HunkFunc")
+				return nil
+			},
+			FindFunc: func([]byte) (string, bool) {
+				t.Fatal("HunkRanges called FindFunc")
+				return "", false
+			},
+		}, []Change{{1, 3, 1, 3}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := r.HunkRanges(t.Context(), tc.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ranges = %+v, want %+v", got, tc.want)
+			}
+			got[0] = Change{}
+			again, err := r.HunkRanges(t.Context(), tc.opts)
+			if err != nil || !reflect.DeepEqual(again, tc.want) {
+				t.Fatalf("range mutation changed result: %+v, %v", again, err)
+			}
+		})
 	}
 }
 
@@ -251,6 +325,40 @@ func TestOutputRegexUsesRawRecords(t *testing.T) {
 	}
 }
 
+func TestOutputPOSIXRegexReference(t *testing.T) {
+	ref := oracle(t)
+	for _, tc := range []struct {
+		name, pattern, record     string
+		goSuppressed, cSuppressed bool
+	}{
+		{"line anchors", "^old$", "old\n", true, true},
+		{"negated class excludes newline", "[^x]", "\n", false, false},
+		{"CRLF remains intact", "^old$", "old\r\n", false, false},
+		{"C locale counts bytes", "^.$", "é\n", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Diff(t.Context(), []byte(tc.record), nil,
+				&Options{IgnoreRegex: []*regexp.Regexp{regexp.MustCompilePOSIX(tc.pattern)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got bytes.Buffer
+			if err := WriteUnified(t.Context(), &got, r, nil); err != nil {
+				t.Fatal(err)
+			}
+			want := ref.Diff(t, []byte(tc.record), nil,
+				testref.DiffOptions{IgnorePatterns: []string{tc.pattern}})
+			if (got.Len() == 0) != tc.goSuppressed || (len(want) == 0) != tc.cSuppressed {
+				t.Fatalf("pattern %q, record %q: Go output %q, C output %q",
+					tc.pattern, tc.record, got.Bytes(), want)
+			}
+			if tc.goSuppressed == tc.cSuppressed && !bytes.Equal(got.Bytes(), want) {
+				t.Fatalf("output mismatch: Go %q, C %q", got.Bytes(), want)
+			}
+		})
+	}
+}
+
 func TestOutputHugeContext(t *testing.T) {
 	ref := oracle(t)
 	maxInt := int(^uint(0) >> 1)
@@ -285,6 +393,11 @@ func TestOutputErrors(t *testing.T) {
 	}
 	callbacks := EmitCallbacks{LineFunc: func(...[]byte) error { return nil }}
 	for _, emit := range []*EmitOptions{{Context: -1}, {InterHunkContext: -1}} {
+		if _, err := r.HunkRanges(t.Context(), &EmitOptions{
+			Context: emit.Context, InterHunkContext: emit.InterHunkContext,
+		}); err == nil {
+			t.Fatal("ranges accepted negative context")
+		}
 		if _, err := r.Hunks(context.Background(), emit); err == nil {
 			t.Fatal("accepted negative context")
 		}
@@ -297,6 +410,9 @@ func TestOutputErrors(t *testing.T) {
 	}
 	if _, err := r.Hunks(nil, nil); err == nil {
 		t.Fatal("accepted nil context")
+	}
+	if _, err := r.HunkRanges(nil, nil); err == nil {
+		t.Fatal("ranges accepted nil context")
 	}
 	if err := WriteUnified(nil, io.Discard, r, nil); err == nil {
 		t.Fatal("writer accepted nil context")
@@ -338,7 +454,11 @@ func TestEmitAllocations(t *testing.T) {
 		{"default", new, false, nil, 4},
 		{"no header", new, true, nil, 3},
 		{"custom header", new, false, func(Hunk) error { return nil }, 3},
-		{"unchanged", bytes.Clone(old), false, nil, 2},
+		{"suppressed header", new, true, func(Hunk) error {
+			t.Fatal("suppressed header callback ran")
+			return nil
+		}, 3},
+		{"unchanged", bytes.Clone(old), false, nil, 0},
 	} {
 		t.Run(spec.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -360,7 +480,8 @@ func TestEmitAllocations(t *testing.T) {
 					t.Fatal(err)
 				}
 			})
-			if limit := len(hunks) + spec.overhead; allocs > float64(limit) {
+			limit := len(hunks) + spec.overhead
+			if allocs > float64(limit) {
 				t.Fatalf("emission: %.0f allocations, want at most %d", allocs, limit)
 			}
 		})
@@ -391,6 +512,139 @@ func TestEmitRetainedHunks(t *testing.T) {
 		if string(hunks[i].Lines[0].Content) != want[0] || string(hunks[i].Lines[1].Content) != want[1] {
 			t.Fatalf("retained hunk %d changed: %+v", i, hunks[i])
 		}
+	}
+}
+
+func TestEmitHunkFunc(t *testing.T) {
+	r, err := Diff(t.Context(), []byte("head\nold-one\nsame\nold-two\ntail\n"),
+		[]byte("head\nnew-one\nsame\nnew-two\ntail\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ranges []Change
+	opts := EmitOptions{
+		Context: 1, FunctionNames: true, FunctionContext: true,
+		FindFunc: func([]byte) (string, bool) {
+			t.Fatal("range emission called FindFunc")
+			return "", false
+		},
+		HunkFunc: func(change Change) error {
+			ranges = append(ranges, change)
+			return nil
+		},
+	}
+	callbacks := EmitCallbacks{
+		HunkHeaderFunc: func(Hunk) error {
+			t.Fatal("range emission called HunkHeaderFunc")
+			return nil
+		},
+		LineFunc: func(...[]byte) error {
+			t.Fatal("range emission called LineFunc")
+			return nil
+		},
+	}
+	for _, noHeader := range []bool{false, true} {
+		opts.NoHunkHeader = noHeader
+		for _, cb := range []*EmitCallbacks{nil, {}, &callbacks} {
+			ranges = nil
+			if err := r.Emit(t.Context(), &opts, cb); err != nil {
+				t.Fatal(err)
+			}
+			if want := []Change{{1, 3, 1, 3}}; !reflect.DeepEqual(ranges, want) {
+				t.Fatalf("ranges = %+v, want %+v", ranges, want)
+			}
+		}
+	}
+	var output bytes.Buffer
+	if err := WriteUnified(t.Context(), &output, r, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() != 0 || len(ranges) != 2 {
+		t.Fatalf("range-only writer: output %q, ranges %+v", output.Bytes(), ranges)
+	}
+}
+
+func TestEmitHunkFuncEmpty(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"", ""}, {"same\n", "same\n"}, {"head\n\nend\n", "head\nend\n"},
+	} {
+		r, err := Diff(t.Context(), []byte(pair[0]), []byte(pair[1]), &Options{IgnoreBlankLines: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := EmitOptions{HunkFunc: func(Change) error {
+			t.Fatal("range callback received an unchanged or ignored range")
+			return nil
+		}}
+		if err := r.Emit(t.Context(), &opts, nil); err != nil {
+			t.Fatal(err)
+		}
+		if ranges, err := r.HunkRanges(t.Context(), nil); err != nil || ranges != nil {
+			t.Fatalf("empty ranges = %+v, %v", ranges, err)
+		}
+	}
+}
+
+func TestEmitHunkFuncStops(t *testing.T) {
+	r, err := Diff(t.Context(), []byte("old-one\nsame\nold-two\n"), []byte("new-one\nsame\nnew-two\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("range callback failure")
+	for _, cancelCallback := range []bool{false, true} {
+		for stopAt := 1; stopAt <= 2; stopAt++ {
+			t.Run(fmt.Sprintf("cancel=%v/at=%d", cancelCallback, stopAt), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				calls := 0
+				opts := EmitOptions{HunkFunc: func(Change) error {
+					calls++
+					if calls == stopAt {
+						if cancelCallback {
+							cancel()
+							return nil
+						}
+						return failure
+					}
+					return nil
+				}}
+				err := r.Emit(ctx, &opts, nil)
+				want := failure
+				if cancelCallback {
+					want = context.Canceled
+				}
+				if !errors.Is(err, want) || calls != stopAt {
+					t.Fatalf("error = %v, calls = %d; want %v at %d", err, calls, want, stopAt)
+				}
+			})
+		}
+	}
+}
+
+func TestEmitHunkFuncAllocations(t *testing.T) {
+	ctx := t.Context()
+	r, err := Diff(ctx, bytes.Repeat([]byte("old\nsame\n"), 64),
+		bytes.Repeat([]byte("new\nsame\n"), 64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := EmitOptions{HunkFunc: func(Change) error { return nil }}
+	allocs := testing.AllocsPerRun(10, func() {
+		if err := r.Emit(ctx, &opts, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs > 1 {
+		t.Fatalf("range emission: %.0f allocations, want at most 1", allocs)
+	}
+	opts.Context = 1
+	allocs = testing.AllocsPerRun(10, func() {
+		if _, err := r.HunkRanges(ctx, &opts); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs > 2 {
+		t.Fatalf("range collection: %.0f allocations, want at most 2", allocs)
 	}
 }
 

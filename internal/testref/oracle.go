@@ -34,7 +34,7 @@ type MergeOptions struct {
 	Ancestor, Ours, Theirs          string
 }
 
-// Change contains zero-based line offsets and line counts before ignore filters.
+// Change contains zero-based line offsets and line counts.
 type Change struct {
 	OldStart, OldCount, NewStart, NewCount int
 }
@@ -135,6 +135,19 @@ func (o *Oracle) runTail(t testing.TB, args, tail []string, inputs ...[]byte) ([
 // Diff returns unified hunks without file headers.
 func (o *Oracle) Diff(t testing.TB, old, new []byte, opts DiffOptions) []byte {
 	t.Helper()
+	return o.runDiff(t, "diff", old, new, opts)
+}
+
+// HunkRanges returns grouped changes after blank-line and regex filters.
+// Context affects grouping, but ranges exclude surrounding context.
+// Ranges can include unchanged lines between changes.
+func (o *Oracle) HunkRanges(t testing.TB, old, new []byte, opts DiffOptions) []Change {
+	t.Helper()
+	return parseChanges(t, o.runDiff(t, "ranges", old, new, opts))
+}
+
+func (o *Oracle) runDiff(t testing.TB, mode string, old, new []byte, opts DiffOptions) []byte {
+	t.Helper()
 	var tail []string
 	for _, anchor := range opts.Anchors {
 		tail = append(tail, "--anchor", anchor)
@@ -142,7 +155,7 @@ func (o *Oracle) Diff(t testing.TB, old, new []byte, opts DiffOptions) []byte {
 	for _, pattern := range opts.IgnorePatterns {
 		tail = append(tail, "--ignore", pattern)
 	}
-	output, _ := o.runTail(t, []string{"diff", strconv.FormatUint(opts.Flags, 10),
+	output, _ := o.runTail(t, []string{mode, strconv.FormatUint(opts.Flags, 10),
 		strconv.Itoa(opts.Context), strconv.Itoa(opts.Interhunk),
 		strconv.FormatUint(opts.EmitFlags, 10)}, tail, old, new)
 	return output
@@ -162,6 +175,11 @@ func (o *Oracle) ScriptWithAnchors(t testing.TB, old, new []byte, flags uint64, 
 		tail = append(tail, "--anchor", anchor)
 	}
 	output, _ := o.runTail(t, []string{"script", strconv.FormatUint(flags, 10)}, tail, old, new)
+	return parseChanges(t, output)
+}
+
+func parseChanges(t testing.TB, output []byte) []Change {
+	t.Helper()
 	var changes []Change
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		if line == "" {
@@ -170,7 +188,7 @@ func (o *Oracle) ScriptWithAnchors(t testing.TB, old, new []byte, flags uint64, 
 		var change Change
 		if n, err := fmt.Sscanf(line, "%d %d %d %d", &change.OldStart, &change.OldCount,
 			&change.NewStart, &change.NewCount); err != nil || n != 4 {
-			t.Fatalf("invalid C reference script %q: %v", line, err)
+			t.Fatalf("invalid C reference change %q: %v", line, err)
 		}
 		changes = append(changes, change)
 	}

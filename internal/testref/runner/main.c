@@ -49,6 +49,14 @@ static int output(void *unused, mmfile_t *buffers, int count)
 	return 0;
 }
 
+static int hunk_range(long old_start, long old_count,
+		      long new_start, long new_count, void *unused)
+{
+	(void)unused;
+	return printf("%ld %ld %ld %ld\n", old_start, old_count,
+		      new_start, new_count) < 0 ? -1 : 0;
+}
+
 static int script(mmfile_t *old, mmfile_t *new, xpparam_t *params)
 {
 	xdfenv_t env;
@@ -97,7 +105,8 @@ int main(int argc, char **argv)
 	xpparam_t params = {0};
 	mmfile_t old, new;
 	int status;
-	if (argc >= 8 && !strcmp(argv[1], "diff")) {
+	if (argc >= 8 &&
+	    (!strcmp(argv[1], "diff") || !strcmp(argv[1], "ranges"))) {
 		xdemitconf_t config = {0};
 		xdemitcb_t callback = {0};
 		params.flags = number(argv[2]);
@@ -105,7 +114,10 @@ int main(int argc, char **argv)
 		config.ctxlen = number(argv[3]);
 		config.interhunkctxlen = number(argv[4]);
 		config.flags = number(argv[5]);
-		callback.out_line = output;
+		if (!strcmp(argv[1], "ranges"))
+			config.hunk_func = hunk_range;
+		else
+			callback.out_line = output;
 		old = read_file(argv[6]);
 		new = read_file(argv[7]);
 		status = xdl_diff(&old, &new, &params, &config, &callback);
@@ -144,6 +156,7 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 			"usage:\n"
 			"  oracle diff FLAGS CONTEXT INTERHUNK EMIT_FLAGS OLD NEW\n"
+			"  oracle ranges FLAGS CONTEXT INTERHUNK EMIT_FLAGS OLD NEW\n"
 			"  oracle script FLAGS OLD NEW\n"
 			"  oracle merge FLAGS LEVEL FAVOR STYLE MARKER BASE_LABEL OURS_LABEL THEIRS_LABEL BASE OURS THEIRS\n");
 		return 2;

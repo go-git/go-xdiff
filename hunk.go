@@ -188,8 +188,28 @@ func (b *hunkBuilder) empty(i int) bool {
 	return true
 }
 
+// HunkRanges returns filtered, grouped changes without outer context.
+// Ranges can include unchanged lines between changes.
+// Only Context and InterHunkContext affect range construction.
+// HunkRanges does not call HunkFunc or FindFunc.
+func (r *Result) HunkRanges(ctx context.Context, options *EmitOptions) ([]Change, error) {
+	opts, err := emitOptions(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	var ranges []Change
+	err = r.eachHunkRange(ctx, opts, func(change Change) error {
+		ranges = append(ranges, change)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ranges, nil
+}
+
 // Hunks returns unified hunks whose line contents refer to the original inputs.
-// NoHunkHeader affects Emit and WriteUnified only.
+// NoHunkHeader and HunkFunc affect Emit and WriteUnified only.
 func (r *Result) Hunks(ctx context.Context, options *EmitOptions) ([]Hunk, error) {
 	opts, err := emitOptions(ctx, options)
 	if err != nil {
@@ -204,6 +224,39 @@ func (r *Result) Hunks(ctx context.Context, options *EmitOptions) ([]Hunk, error
 		return nil, err
 	}
 	return hunks, nil
+}
+
+func (r *Result) eachHunkRange(ctx context.Context, opts EmitOptions, emit func(Change) error) error {
+	changes, err := r.emitChanges(ctx)
+	if err != nil {
+		return err
+	}
+	for next := 0; next < len(changes); {
+		start, last, err := getHunk(ctx, changes, next, opts)
+		if err != nil {
+			return err
+		}
+		if start == len(changes) {
+			break
+		}
+		first, end := changes[start], changes[last]
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := emit(Change{
+			OldStart: first.OldStart,
+			OldLines: end.OldStart + end.OldLines - first.OldStart,
+			NewStart: first.NewStart,
+			NewLines: end.NewStart + end.NewLines - first.NewStart,
+		}); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		next = last + 1
+	}
+	return ctx.Err()
 }
 
 func (r *Result) eachHunk(ctx context.Context, opts EmitOptions, emit func(Hunk) error) error {

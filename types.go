@@ -35,8 +35,8 @@ type Options struct {
 	// IgnoreRegex suppresses changes whose lines all match at least one
 	// expression. Expressions match full records, including final newlines.
 	// Expressions use Go regexp semantics. Use (?m) for Git-like line anchors.
-	// CompilePOSIX provides POSIX ERE syntax, but does not reproduce C's
-	// REG_NEWLINE flag or locale-dependent rules.
+	// CompilePOSIX provides POSIX ERE syntax and newline-aware matching.
+	// Go matches UTF-8 code points; C matching depends on its locale.
 	IgnoreRegex []*regexp.Regexp
 	// Anchors are line prefixes that constrain patience diff.
 	Anchors []string
@@ -75,6 +75,12 @@ type EmitOptions struct {
 	// FindFunc identifies a function header and its display name.
 	// A nil callback uses xdiff's default ASCII header detection.
 	FindFunc func(line []byte) (name string, ok bool)
+	// HunkFunc selects range-only output for Emit and WriteUnified.
+	// Ranges exclude outer context but include unchanged gaps within a group.
+	// Context and InterHunkContext control grouping.
+	// Emit skips function options and EmitCallbacks in this mode.
+	// An error stops emission.
+	HunkFunc func(Change) error
 }
 
 // EmitCallbacks receives unified output without file headers.
@@ -86,7 +92,8 @@ type EmitCallbacks struct {
 	HunkHeaderFunc func(Hunk) error
 	// LineFunc receives a record's prefix, original content, and optional
 	// missing-newline notice as separate parts. It also receives default headers.
-	// LineFunc is required. The parts and their bytes are borrowed:
+	// LineFunc is required unless EmitOptions.HunkFunc is set.
+	// The parts and their bytes are borrowed:
 	// do not modify them or retain them after the callback returns.
 	LineFunc func(parts ...[]byte) error
 }

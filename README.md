@@ -53,9 +53,23 @@ The parts and their bytes are borrowed. Do not modify or retain them.
 
 An optional `HunkHeaderFunc` replaces the standard header and receives a `Hunk` with zero-based ranges.
 `NoHunkHeader` suppresses both header paths.
-`LineFunc` is required, even when there are no changes.
+`LineFunc` is required, even when there are no changes, unless `EmitOptions.HunkFunc` is set.
 Callbacks return errors to stop emission. `Emit()` checks cancellation before and after each callback.
 The caller controls colors and terminal detection.
+
+Set `EmitOptions.HunkFunc` for range-only output without header or line callbacks.
+Context settings control grouping, but returned ranges exclude outer context and function expansion.
+`Hunks()` ignores `HunkFunc` and still returns complete hunks.
+
+Use `HunkRanges()` to collect the same ranges into a slice.
+It reuses `EmitOptions` but does not call `HunkFunc` or `FindFunc`.
+
+```go
+ranges, err := result.HunkRanges(ctx, &xdiff.EmitOptions{Context: 3})
+if err != nil {
+	return err
+}
+```
 
 ## Merge
 
@@ -94,6 +108,8 @@ Options remain unchanged. Calls support context cancellation.
 Equal chunks retain both inputs when whitespace rules match different bytes.
 Blank-line and regex filters affect hunks and output, not changes or chunks.
 Ignore expressions use Go's `regexp` rules; use `(?m)` for line anchors.
+Use `regexp.CompilePOSIX` for POSIX ERE syntax and newline-aware matching.
+Exact C regex compatibility is not guaranteed: Go matches UTF-8 code points, while C character interpretation and classes depend on the locale.
 
 See the [API documentation](https://pkg.go.dev/github.com/go-git/go-xdiff),
 [API examples](example_test.go), and [benchmarks](benchmarks/README.md).

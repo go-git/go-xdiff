@@ -3,12 +3,38 @@ package xdiff_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/go-git/go-xdiff"
 )
 
 func ExampleResult_Emit() {
+	result, err := xdiff.Diff(context.Background(), []byte("old\n"), []byte("new\n"), nil)
+	if err != nil {
+		panic(err)
+	}
+	var output bytes.Buffer
+	err = result.Emit(context.Background(), nil, &xdiff.EmitCallbacks{
+		LineFunc: func(parts ...[]byte) error {
+			for _, part := range parts {
+				output.Write(part)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Print(output.String())
+	// Output:
+	// @@ -1 +1 @@
+	// -old
+	// +new
+}
+
+func ExampleResult_Emit_customHeader() {
 	result, err := xdiff.Diff(context.Background(), []byte("old"), []byte("new"), nil)
 	if err != nil {
 		panic(err)
@@ -36,6 +62,29 @@ func ExampleResult_Emit() {
 	// \ No newline at end of file
 	// +new
 	// \ No newline at end of file
+}
+
+func ExampleResult_Emit_noHeader() {
+	result, err := xdiff.Diff(context.Background(), []byte("old\n"), []byte("new\n"), nil)
+	if err != nil {
+		panic(err)
+	}
+	var output bytes.Buffer
+	err = result.Emit(context.Background(), &xdiff.EmitOptions{NoHunkHeader: true}, &xdiff.EmitCallbacks{
+		LineFunc: func(parts ...[]byte) error {
+			for _, part := range parts {
+				output.Write(part)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Print(output.String())
+	// Output:
+	// -old
+	// +new
 }
 
 func ExampleResult_Emit_colors() {
@@ -67,6 +116,83 @@ func ExampleResult_Emit_colors() {
 	fmt.Printf("%q\n", output.String())
 	// Output:
 	// "\x1b[36m@@ -1 +1 @@\n\x1b[0m\x1b[31m-old\n\x1b[0m\x1b[32m+new\n\x1b[0m"
+}
+
+func ExampleResult_Emit_ranges() {
+	result, err := xdiff.Diff(context.Background(),
+		[]byte("head\nold-one\nsame\nold-two\ntail\n"),
+		[]byte("head\nnew-one\nsame\nnew-two\ntail\n"), nil)
+	if err != nil {
+		panic(err)
+	}
+	err = result.Emit(context.Background(), &xdiff.EmitOptions{
+		Context: 1,
+		HunkFunc: func(change xdiff.Change) error {
+			_, err := fmt.Printf("old=[%d,%d) new=[%d,%d)\n",
+				change.OldStart, change.OldStart+change.OldLines,
+				change.NewStart, change.NewStart+change.NewLines)
+			return err
+		},
+	}, nil)
+	if err != nil {
+		panic(err)
+	}
+	// Output: old=[1,4) new=[1,4)
+}
+
+func ExampleResult_Emit_stop() {
+	result, err := xdiff.Diff(context.Background(), []byte("old\nsame\nold\n"), []byte("new\nsame\nnew\n"), nil)
+	if err != nil {
+		panic(err)
+	}
+	stop := errors.New("stop")
+	calls := 0
+	err = result.Emit(context.Background(), &xdiff.EmitOptions{
+		HunkFunc: func(xdiff.Change) error {
+			calls++
+			return stop
+		},
+	}, nil)
+	fmt.Println("calls:", calls)
+	fmt.Println("stopped:", errors.Is(err, stop))
+	// Output:
+	// calls: 1
+	// stopped: true
+}
+
+func ExampleResult_HunkRanges() {
+	result, err := xdiff.Diff(context.Background(),
+		[]byte("head\nold-one\nsame\nold-two\ntail\n"),
+		[]byte("head\nnew-one\nsame\nnew-two\ntail\n"), nil)
+	if err != nil {
+		panic(err)
+	}
+	ranges, err := result.HunkRanges(context.Background(), &xdiff.EmitOptions{Context: 1})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(ranges)
+	// Output: [{1 3 1 3}]
+}
+
+func ExampleResult_HunkRanges_filters() {
+	result, err := xdiff.Diff(context.Background(),
+		[]byte("head\n\nkeep\ntimestamp: old\nsame\nold\n"),
+		[]byte("head\nkeep\ntimestamp: new\nsame\nnew\n"),
+		&xdiff.Options{IgnoreBlankLines: true,
+			IgnoreRegex: []*regexp.Regexp{regexp.MustCompile("^timestamp:")}})
+	if err != nil {
+		panic(err)
+	}
+	ranges, err := result.HunkRanges(context.Background(), nil)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("raw changes:", len(result.Changes()))
+	fmt.Println("ranges:", ranges)
+	// Output:
+	// raw changes: 3
+	// ranges: [{5 1 4 1}]
 }
 
 func ExampleDiff_minimal() {

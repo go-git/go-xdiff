@@ -28,6 +28,34 @@ func TestOracle(t *testing.T) {
 	if got := oracle.Script(t, base, ours, 0); !reflect.DeepEqual(got, []Change{{1, 1, 1, 1}}) {
 		t.Fatalf("script = %#v", got)
 	}
+	t.Run("hunk ranges", func(t *testing.T) {
+		left := []byte("header\na\nb\nc\nd\ne\nfooter\n")
+		right := []byte("header\nA\nb\nc\nd\nE\nfooter\n")
+		for _, tc := range []struct {
+			name     string
+			old, new []byte
+			opts     DiffOptions
+			want     []Change
+		}{
+			{"separate", left, right, DiffOptions{}, []Change{{1, 1, 1, 1}, {5, 1, 5, 1}}},
+			{"context groups without padding", left, right, DiffOptions{Context: 3}, []Change{{1, 5, 1, 5}}},
+			{"interhunk", left, right, DiffOptions{Interhunk: 3}, []Change{{1, 5, 1, 5}}},
+			{"output flags do not expand ranges", left, right, DiffOptions{Context: 3, EmitFlags: 7}, []Change{{1, 5, 1, 5}}},
+			{"regex filter", left, right, DiffOptions{IgnorePatterns: []string{"^[aA]$"}}, []Change{{5, 1, 5, 1}}},
+			{"blank filter", []byte("top\n\nbottom\n"), []byte("top\nbottom\n"), DiffOptions{Flags: 1 << 7}, nil},
+			{"unchanged", left, left, DiffOptions{}, nil},
+			{"insertion", nil, []byte("new\n"), DiffOptions{Context: 3}, []Change{{0, 0, 0, 1}}},
+			{"deletion", []byte("old\n"), nil, DiffOptions{Context: 3}, []Change{{0, 1, 0, 0}}},
+			{"anchors", []byte("a\nanchor\nb\n"), []byte("b\nanchor\na\n"),
+				DiffOptions{Flags: 1 << 14, Anchors: []string{"anchor"}}, []Change{{0, 1, 0, 1}, {2, 1, 2, 1}}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				if got := oracle.HunkRanges(t, tc.old, tc.new, tc.opts); !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("ranges = %#v, want %#v", got, tc.want)
+				}
+			})
+		}
+	})
 	for _, flags := range []uint64{0, 1, 1 << 14, 1 << 15, 1 << 23} {
 		if got := oracle.Diff(t, base, ours, DiffOptions{Flags: flags, Context: 1}); string(got) != string(read("diff.txt")) {
 			t.Fatalf("diff flags %d = %q", flags, got)
