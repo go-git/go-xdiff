@@ -108,6 +108,17 @@ static inline __attribute__((noreturn)) void testref_die(const char *format, ...
 
 #define BUG(...) testref_die(__VA_ARGS__)
 
+static inline size_t st_add(size_t a, size_t b)
+{
+	if (b > SIZE_MAX - a)
+		testref_die("size_t overflow: %zu + %zu", a, b);
+	return a + b;
+}
+
+#define st_add3(a,b,c) st_add(st_add((a),(b)),(c))
+#define st_add4(a,b,c,d) st_add(st_add3((a),(b),(c)),(d))
+#define st_add5(a,b,c,d,e) st_add(st_add4((a),(b),(c),(d)),(e))
+
 static inline void *xmalloc(size_t size)
 {
 	void *p = malloc(size ? size : 1);
